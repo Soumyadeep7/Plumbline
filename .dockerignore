@@ -1,0 +1,9 @@
+**/bin
+**/obj
+**/node_modules
+**/fable_modules
+**/dist
+**/*.fs.js
+**/*.fs.js.map
+.git
+.env

@@ -1,0 +1,1085 @@
+/* Plumbline
+   A plumb line shows whether work is true. One brass weight hangs down the left edge of the
+   page and every piece of content is set flush against that edge.
+
+   Palette: PayPal's navy, blue and gold. Dark theme is navy with brass; light theme is
+   PayPal blue on white. The theme is chosen by data-theme on <html>, set from App.fs.
+   Type: Bricolage Grotesque for headings, Atkinson Hyperlegible (designed for low-vision
+   readers) for everything else, a system monospace only for code and IDs. */
+
+:root {
+  --bg: #001435;
+  --surface: #0a2350;
+  --field: #000c24;
+  --text: #ffffff;
+  --muted: #c6d5f2;
+  --brand: #ffc439;
+  --on-brand: #001435;
+  --line: #3d5fa3;
+  --focus: #ffc439;
+  --bob: #ffc439;
+  --string: #c6d5f2;
+
+  --danger-btn: #ff8a8a;
+  --on-danger-btn: #2b0000;
+  --disabled-bg: #1a2d55;
+  --disabled-line: #6d82ad;
+  --disabled-text: #c6d5f2;
+
+  /* Status colours: background, text and border for banners and pills. */
+  --ok-bg: #5ff09a;
+  --ok-text: #002b12;
+  --ok-line: #ffffff;
+  --bad-bg: #ff8a8a;
+  --bad-text: #2b0000;
+  --bad-line: #ffffff;
+  --wait-bg: #ffc439;
+  --wait-text: #2b1c00;
+  --wait-line: #ffffff;
+  --info-bg: #9ccbff;
+  --info-text: #001435;
+  --info-line: #ffffff;
+
+  /* Status colours used as text or borders on the page background. */
+  --ok-ink: #5ff09a;
+  --bad-ink: #ff8a8a;
+  --wait-ink: #ffc439;
+  --watermark: rgba(255, 196, 57, 0.55);
+
+  --gutter: clamp(2.75rem, 7vw, 5rem);
+  --display: "Bricolage Grotesque", "Trebuchet MS", "Segoe UI", sans-serif;
+  --body: "Atkinson Hyperlegible", Verdana, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
+}
+
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --surface: #f1f6fd;
+  --field: #ffffff;
+  --text: #001c46;
+  --muted: #33496b;
+  --brand: #003087;
+  --on-brand: #ffffff;
+  --line: #9bb7e0;
+  --focus: #0070e0;
+  --bob: #003087;
+  --string: #33496b;
+
+  --danger-btn: #a8001c;
+  --on-danger-btn: #ffffff;
+  --disabled-bg: #e6ebf2;
+  --disabled-line: #7b8798;
+  --disabled-text: #3d4a5c;
+
+  --ok-bg: #d9f5e1;
+  --ok-text: #063d1b;
+  --ok-line: #0b6b2e;
+  --bad-bg: #ffe1e1;
+  --bad-text: #6b0010;
+  --bad-line: #a8001c;
+  --wait-bg: #fff0c2;
+  --wait-text: #473200;
+  --wait-line: #8a6100;
+  --info-bg: #dcecff;
+  --info-text: #003087;
+  --info-line: #003087;
+
+  --ok-ink: #0b6b2e;
+  --bad-ink: #a8001c;
+  --wait-ink: #7a4f00;
+  --watermark: rgba(0, 48, 135, 0.45);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+}
+
+/* Everything shares one left edge; the plumb line hangs in the gutter beside it. */
+.shell {
+  max-width: 70rem;
+  margin: 0 auto;
+  padding: 0 1.25rem 4rem var(--gutter);
+}
+
+.hero-title,
+.page-title,
+.tile-value,
+h2,
+h3,
+.brand,
+.step-number {
+  font-family: var(--display);
+}
+
+h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.75rem;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+p {
+  margin: 0.5rem 0;
+  max-width: 68ch;
+}
+
+a {
+  color: var(--brand);
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+/* Focus is always visible, for keyboard and switch users. */
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.skip-link {
+  position: absolute;
+  left: -999rem;
+  background: var(--brand);
+  color: var(--on-brand);
+  padding: 0.5rem 1rem;
+  font-weight: bold;
+}
+
+.skip-link:focus {
+  left: 1rem;
+  top: 1rem;
+  z-index: 10;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- Top bar ---------- */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1.25rem 0;
+}
+
+.brand {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.toggles .btn {
+  margin: 0;
+}
+
+/* ---------- Hero ---------- */
+
+.hero {
+  position: relative;
+  padding: clamp(2rem, 7vw, 5rem) 0 clamp(2.5rem, 6vw, 4rem);
+}
+
+/* The tagline is a React Bits BlurText: it renders a paragraph, so the heading role sits on
+   this wrapper. */
+.hero-title p {
+  margin: 0;
+  max-width: none;
+}
+
+.hero-title {
+  margin: 0;
+  max-width: 11ch;
+  font-size: clamp(2.75rem, 9vw, 6rem);
+  font-weight: 800;
+  line-height: 0.96;
+  letter-spacing: -0.03em;
+}
+
+.lede {
+  margin: 1.5rem 0 0;
+  max-width: 52ch;
+  color: var(--muted);
+  font-size: 1.25rem;
+  line-height: 1.5;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+.hero-actions .btn {
+  margin: 0;
+}
+
+/* The plumb line: a string from the top of the page and a weight level with the buttons. */
+.plumb {
+  position: absolute;
+  top: -14rem;
+  bottom: 2.5rem;
+  left: calc(var(--gutter) * -0.62);
+  width: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform-origin: top center;
+}
+
+.plumb-string {
+  flex: 1;
+  width: 2px;
+  background: var(--string);
+}
+
+.plumb-bob {
+  width: 1.5rem;
+  height: 2.5rem;
+  background: var(--bob);
+  clip-path: polygon(50% 100%, 0 32%, 18% 0, 82% 0, 100% 32%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* The one piece of motion on the page: the weight swings and comes to rest. */
+  .plumb {
+    animation: settle 2.4s cubic-bezier(0.3, 0.6, 0.3, 1) both;
+  }
+
+  @keyframes settle {
+    0% {
+      transform: rotate(4deg);
+    }
+    30% {
+      transform: rotate(-2.4deg);
+    }
+    55% {
+      transform: rotate(1.2deg);
+    }
+    78% {
+      transform: rotate(-0.5deg);
+    }
+    100% {
+      transform: rotate(0deg);
+    }
+  }
+}
+
+/* ---------- Website sections ---------- */
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+}
+
+.site-nav a {
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.site-nav a:hover {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
+.band {
+  padding: clamp(2.5rem, 6vw, 4.5rem) 0;
+  border-top: 1px solid var(--line);
+  scroll-margin-top: 1rem;
+}
+
+.band h2 {
+  margin-bottom: 1.75rem;
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
+}
+
+/* The three steps are a real sequence, so they are numbered. */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  padding-top: 1rem;
+  border-top: 4px solid var(--brand);
+}
+
+.step-number {
+  display: block;
+  color: var(--brand);
+  font-size: 2.75rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.step-title {
+  margin: 0.6rem 0 0.35rem;
+}
+
+.step-detail,
+.reason p,
+.stack dd {
+  color: var(--muted);
+}
+
+.reasons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2rem;
+}
+
+.stack {
+  display: grid;
+  grid-template-columns: minmax(9rem, 16rem) minmax(0, 1fr);
+  gap: 0;
+  max-width: 52rem;
+  margin: 0;
+}
+
+.stack dt,
+.stack dd {
+  margin: 0;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.stack dt {
+  font-weight: 700;
+}
+
+.closing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+}
+
+.closing h2,
+.closing .btn {
+  margin: 0;
+}
+
+@media (max-width: 48rem) {
+  .steps,
+  .reasons {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+
+  .stack {
+    grid-template-columns: 1fr;
+  }
+
+  .stack dd {
+    padding-top: 0;
+    border-top: 0;
+  }
+}
+
+/* ---------- Workspace ---------- */
+
+.workspace {
+  margin-top: 2rem;
+  padding-top: 0.5rem;
+  scroll-margin-top: 1rem;
+}
+
+.workspace:focus {
+  outline: none;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  margin: 0.75rem 0.5rem 0.25rem 0;
+  padding: 0.5rem 1.1rem;
+  background: transparent;
+  color: var(--text);
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: var(--text);
+}
+
+.btn-primary,
+.btn-primary:hover {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--on-brand);
+}
+
+.btn-danger,
+.btn-danger:hover {
+  background: var(--danger-btn);
+  border-color: var(--danger-btn);
+  color: var(--on-danger-btn);
+}
+
+.btn-small {
+  min-height: 2.25rem;
+  padding: 0.25rem 0.8rem;
+  font-size: 0.95rem;
+}
+
+.btn:disabled,
+.btn:disabled:hover {
+  cursor: not-allowed;
+  background: var(--disabled-bg);
+  border-color: var(--disabled-line);
+  color: var(--disabled-text);
+}
+
+/* Status banners start with a word (Done, Problem, Working, Note), so meaning never depends
+   on colour or on sound. */
+.banner {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  max-width: 68ch;
+  margin: 0 0 1.5rem;
+  padding: 0.9rem 1rem;
+  border: 2px solid;
+  border-left-width: 10px;
+  border-radius: 6px;
+}
+
+.banner-tag {
+  white-space: nowrap;
+}
+
+.banner-success,
+.pill-success {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+  border-color: var(--ok-line);
+}
+
+.banner-danger,
+.pill-danger {
+  background: var(--bad-bg);
+  color: var(--bad-text);
+  border-color: var(--bad-line);
+}
+
+.banner-warning,
+.pill-warning {
+  background: var(--wait-bg);
+  color: var(--wait-text);
+  border-color: var(--wait-line);
+}
+
+.banner-info,
+.pill-info {
+  background: var(--info-bg);
+  color: var(--info-text);
+  border-color: var(--info-line);
+}
+
+.pill {
+  display: inline-block;
+  padding: 0.1rem 0.7rem;
+  border: 2px solid;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.busy {
+  color: var(--wait-ink);
+  font-weight: 700;
+}
+
+.field {
+  max-width: 44rem;
+  margin: 1.25rem 0;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-weight: 700;
+}
+
+.field .hint {
+  margin: 0 0 0.4rem;
+}
+
+input[type="text"],
+select,
+textarea {
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  background: var(--field);
+  color: var(--text);
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+}
+
+input[type="text"]:hover,
+textarea:hover {
+  border-color: var(--text);
+}
+
+#asset-text {
+  font-family: var(--mono);
+  font-size: 0.95rem;
+}
+
+textarea:disabled,
+textarea:disabled:hover {
+  border-style: dashed;
+  border-color: var(--disabled-line);
+  color: var(--muted);
+}
+
+input[type="file"] {
+  font: inherit;
+  color: var(--text);
+}
+
+.panel {
+  max-width: 52rem;
+  margin: 1.5rem 0;
+  padding: 1.25rem 1.5rem;
+  background: var(--surface);
+  border-radius: 10px;
+}
+
+.summary {
+  margin: 0.5rem 0;
+  padding-left: 1.4rem;
+  font-size: 1.15rem;
+}
+
+.summary li {
+  margin: 0.45rem 0;
+}
+
+.summary li::marker {
+  color: var(--brand);
+}
+
+details {
+  margin-top: 0.75rem;
+}
+
+summary {
+  color: var(--brand);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+pre {
+  margin: 0.5rem 0;
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.plain {
+  padding: 0.65rem 0.75rem;
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.asset {
+  position: relative;
+  min-height: 7rem;
+  overflow: hidden;
+  background: var(--field);
+  border: 2px solid var(--ok-ink);
+  border-radius: 6px;
+}
+
+.asset-locked {
+  border: 2px dashed var(--wait-ink);
+  user-select: none;
+}
+
+.asset-text {
+  margin: 0;
+  padding: 0.85rem;
+  max-height: 28rem;
+  overflow: auto;
+}
+
+.asset-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.watermark {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transform: rotate(-8deg);
+  color: var(--watermark);
+  font-family: var(--display);
+  font-size: 1.5rem;
+  font-weight: 800;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.paypal-box {
+  max-width: 24rem;
+  min-height: 3rem;
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: #ffffff;
+  border-radius: 6px;
+}
+
+.verdict {
+  border-left: 10px solid;
+}
+
+.verdict-release {
+  border-color: var(--ok-ink);
+}
+
+.verdict-refund {
+  border-color: var(--bad-ink);
+}
+
+.verdict-line {
+  font-family: var(--display);
+  font-size: 1.4rem;
+  font-weight: 800;
+}
+
+.verdict-release .verdict-line {
+  color: var(--ok-ink);
+}
+
+.verdict-refund .verdict-line {
+  color: var(--bad-ink);
+}
+
+.score-track {
+  height: 0.75rem;
+  max-width: 24rem;
+  margin: 0.5rem 0;
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.score-fill {
+  height: 100%;
+  background: var(--brand);
+}
+
+/* ---------- App: sidebar, page header, dashboard ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  height: 100vh;
+  padding: 1.25rem 1rem;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+
+.brand-button {
+  padding: 0.25rem 0.75rem;
+  background: none;
+  color: var(--text);
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-item {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-item:hover {
+  background: var(--field);
+}
+
+.nav-current,
+.nav-current:hover {
+  background: var(--brand);
+  color: var(--on-brand);
+}
+
+.sidebar-status {
+  margin-top: auto;
+  padding: 1rem 0.75rem 0;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.sidebar-status p {
+  margin: 0.25rem 0;
+}
+
+.app-main {
+  min-width: 0;
+  padding: 1.5rem clamp(1rem, 3vw, 2.5rem) 3rem;
+}
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.page-title {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.page-head .hint {
+  margin: 0.25rem 0 0;
+}
+
+.page-head .toggles {
+  align-items: center;
+}
+
+.app .workspace {
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.app .panel {
+  max-width: 64rem;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.tile {
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border-radius: 10px;
+}
+
+.tile-label {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.tile-value {
+  margin: 0.2rem 0 0.35rem;
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.tile-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.columns .panel {
+  max-width: none;
+  margin: 0;
+}
+
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.panel-head h3,
+.panel-head .btn {
+  margin: 0;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.65rem 0.75rem 0.65rem 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.data-table th {
+  color: var(--muted);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.data-table .num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.data-table .pill,
+.activity .pill {
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.data-table .btn {
+  margin: 0;
+}
+
+.cell-title,
+.cell-sub {
+  display: block;
+}
+
+.cell-title {
+  font-weight: 700;
+}
+
+.cell-sub {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.activity {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.activity li {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.activity li:last-child {
+  border-bottom: 0;
+}
+
+.activity p {
+  margin: 0.2rem 0;
+}
+
+.activity-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.activity-title {
+  font-weight: 700;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.filter {
+  flex: 1 1 14rem;
+  max-width: 22rem;
+}
+
+select {
+  min-height: 2.9rem;
+}
+
+.integration {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.integration p {
+  margin: 0;
+}
+
+.integration-name {
+  font-weight: 700;
+}
+
+@media (max-width: 64rem) {
+  .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 48rem) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    gap: 0.75rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .nav-list {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+  }
+
+  .nav-item {
+    white-space: nowrap;
+  }
+
+  .sidebar-status {
+    display: none;
+  }
+}
+
+footer {
+  margin-top: 4rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
