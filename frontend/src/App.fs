@@ -143,6 +143,12 @@ let private applyTheme (theme: string) : unit = jsNative
 [<Emit("(function () { try { return window.localStorage.getItem('plumbline-theme') === 'light'; } catch (e) { return false; } })()")>]
 let private savedLightTheme () : bool = jsNative
 
+[<Emit("(function () { try { return window.localStorage.getItem('plumbline-voice') === 'off'; } catch (e) { return false; } })()")>]
+let private savedVoiceOff () : bool = jsNative
+
+[<Emit("(function (on) { try { window.localStorage.setItem('plumbline-voice', on ? 'on' : 'off'); } catch (e) { } })($0)")>]
+let private saveVoice (on: bool) : unit = jsNative
+
 [<Emit("new Date($0).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })")>]
 let private localDate (isoDate: string) : string = jsNative
 
@@ -290,7 +296,7 @@ let init () : Model * Cmd<Msg> =
           Dashboard = None
           StatusFilter = "ALL"
           Search = ""
-          SpeechOn = true
+          SpeechOn = not (savedVoiceOff ())
           Light = light
           Busy = None
           Banner = None
@@ -381,7 +387,10 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
                 SpeechOn = on
                 Announcement = text }
 
-        next, Cmd.ofEffect (fun _ -> if on then speak text else stopSpeaking ())
+        next,
+        Cmd.ofEffect (fun _ ->
+            saveVoice on
+            if on then speak text else stopSpeaking ())
 
     | ConfigLoaded cfg ->
         let next = { model with Config = Some cfg }
@@ -1264,6 +1273,26 @@ let private themeToggle (model: Model) (dispatch: Msg -> unit) =
                       prop.children
                           [ Html.span [ prop.className (if model.Light then "icon icon-sun" else "icon icon-moon") ] ] ] ] ]
 
+/// Speaker button: turns spoken announcements on or off. Turning it off also stops a message
+/// that is being read out right now. The choice is remembered in this browser.
+let private voiceToggle (model: Model) (dispatch: Msg -> unit) =
+    let label =
+        if model.SpeechOn then
+            "Voice announcements are on. Turn them off"
+        else
+            "Voice announcements are off. Turn them on"
+
+    Html.button
+        [ prop.className "icon-btn"
+          aria "pressed" (if model.SpeechOn then "true" else "false")
+          aria "label" "Voice announcements"
+          prop.custom ("title", label)
+          prop.onClick (fun _ -> dispatch ToggleSpeech)
+          prop.children
+              [ Html.span
+                    [ prop.className (if model.SpeechOn then "icon icon-voice-on" else "icon icon-voice-off")
+                      aria "hidden" "true" ] ] ]
+
 let private integrationRow (name: string) (detail: string) (ready: bool) =
     Html.div
         [ prop.className "integration"
@@ -1423,6 +1452,7 @@ let private appView (model: Model) (dispatch: Msg -> unit) =
                                                                prop.text "Refresh" ]
                                                      else
                                                          Html.none)
+                                                    voiceToggle model dispatch
                                                     themeToggle model dispatch ] ] ] ]
                             Html.main
                                 [ prop.id "workspace"
@@ -1478,7 +1508,8 @@ let private siteView (model: Model) (dispatch: Msg -> unit) =
                             Html.div
                                 [ prop.className "toggles"
                                   prop.children
-                                      [ themeToggle model dispatch
+                                      [ voiceToggle model dispatch
+                                        themeToggle model dispatch
                                         Html.button
                                             [ prop.className "btn btn-small btn-primary"
                                               prop.onClick (fun _ -> dispatch (EnterApp Overview))
