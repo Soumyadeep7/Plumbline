@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Plumbline.Api;
@@ -111,21 +113,48 @@ public sealed class UserAccount
 }
 
 public sealed record SignUpRequest(string? Name, string? Email, string? Password, string? Role);
-public sealed record LogInRequest(string? Email, string? Password);
+public sealed record LogInRequest(string? Email, string? Password, string? Record);
+public sealed record RememberedRequest(string? Record);
+
+/// <summary>A saved account as the browser keeps it: everything needed to log in again after a restart.</summary>
+public sealed record SignedAccountRecord(string Kind, Guid Id, string Name, string Email, string Role, string Salt, string Hash, long Exp);
+
+/// <summary>What the session cookie carries, so a sign-in survives server restarts.</summary>
+public sealed record SignedSession(string Kind, Guid Id, string Name, string Email, string Role, long Exp);
 
 /// <summary>
-/// Email-and-password accounts and their sign-in sessions, kept in memory like projects:
-/// both are cleared when the API restarts. Passwords are stored only as salted PBKDF2 hashes.
+/// Email-and-password accounts. The server keeps them in memory, which the free host wipes on
+/// every restart, so each browser also keeps a signed record of the accounts used in it. The
+/// record is signed with a key derived from a server secret, so the browser cannot alter it, and
+/// it lets that browser log in again (or switch with one click) after a restart. Passwords are
+/// stored only as salted PBKDF2 hashes. The session cookie is signed the same way.
 /// </summary>
 public sealed class AccountStore
 {
     public const string CookieName = "plumbline_session";
     public static readonly TimeSpan SessionLifetime = TimeSpan.FromHours(12);
+    public static readonly TimeSpan RememberLifetime = TimeSpan.FromDays(30);
     private const int Iterations = 100_000;
+    private const string AccountKind = "account";
+    private const string SessionKind = "session";
     private static readonly byte[] DummySalt = RandomNumberGenerator.GetBytes(16);
 
     private readonly ConcurrentDictionary<string, UserAccount> _byEmail = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, (UserAccount Account, DateTimeOffset ExpiresUtc)> _sessions = new();
+    private readonly byte[] _key;
+
+    public AccountStore()
+    {
+        // The signing key must stay the same across restarts. ACCOUNT_SECRET is used when set;
+        // otherwise the key is derived from a secret the app already has. Changing that secret
+        // signs everyone out and makes saved accounts unusable.
+        var secret = new[] { "ACCOUNT_SECRET", "PAYPAL_SECRET", "ANTHROPIC_API_KEY" }
+            .Select(name => Environment.GetEnvironmentVariable(name))
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+        _key = secret is null
+            ? RandomNumberGenerator.GetBytes(32)
+            : SHA256.HashData(Encoding.UTF8.GetBytes("plumbline-accounts-v1|" + secret));
+    }
 
     /// <summary>Creates an account. Returns the account, or null and a message saying what to fix.</summary>
     public (UserAccount? Account, string Error) SignUp(string? name, string? email, string? password, string? role)
@@ -160,13 +189,28 @@ public sealed class AccountStore
         return (account, "");
     }
 
-    /// <summary>Checks the email and password. Returns null when either is wrong.</summary>
-    public UserAccount? LogIn(string? email, string? password)
+    /// <summary>
+    /// Checks the email and password. When the server has forgotten the account since a restart,
+    /// the browser's saved record for that email is used to restore it first.
+    /// </summary>
+    public UserAccount? LogIn(string? email, string? password, string? record)
     {
         email = (email ?? "").Trim();
         password ??= "";
 
-        if (!_byEmail.TryGetValue(email, out var account))
+        UserAccount? account = null;
+        if (_byEmail.TryGetValue(email, out var known))
+        {
+            account = known;
+        }
+        else
+        {
+            var restored = FromRecord(record);
+            if (restored is not null && string.Equals(restored.Email, email, StringComparison.OrdinalIgnoreCase))
+                account = restored;
+        }
+
+        if (account is null)
         {
             // Spend the same time as a real check, so response times do not reveal which emails exist.
             Hash(password, DummySalt);
@@ -178,24 +222,129 @@ public sealed class AccountStore
             : null;
     }
 
-    public string StartSession(UserAccount account)
+    /// <summary>A signed record of the account for the browser to keep. Valid for 30 days.</summary>
+    public string IssueRecord(UserAccount account) =>
+        Sign(new SignedAccountRecord(
+            AccountKind,
+            account.Id,
+            account.Name,
+            account.Email,
+            account.Role,
+            Convert.ToBase64String(account.Salt),
+            Convert.ToBase64String(account.PasswordHash),
+            DateTimeOffset.UtcNow.Add(RememberLifetime).ToUnixTimeSeconds()));
+
+    /// <summary>
+    /// Reads a saved record and puts the account back in memory if the server has forgotten it.
+    /// Returns null when the record is altered, expired, or its email now belongs to another account.
+    /// </summary>
+    public UserAccount? FromRecord(string? record)
     {
-        var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        _sessions[token] = (account, DateTimeOffset.UtcNow.Add(SessionLifetime));
-        return token;
+        var saved = Verify<SignedAccountRecord>(record);
+        if (saved is null ||
+            saved.Kind != AccountKind ||
+            saved.Exp < DateTimeOffset.UtcNow.ToUnixTimeSeconds() ||
+            (saved.Role != Roles.Freelancer && saved.Role != Roles.Client) ||
+            string.IsNullOrEmpty(saved.Email) ||
+            string.IsNullOrEmpty(saved.Salt) ||
+            string.IsNullOrEmpty(saved.Hash))
+        {
+            return null;
+        }
+
+        UserAccount restored;
+        try
+        {
+            restored = new UserAccount
+            {
+                Id = saved.Id,
+                Name = saved.Name ?? "",
+                Email = saved.Email,
+                Role = saved.Role,
+                Salt = Convert.FromBase64String(saved.Salt),
+                PasswordHash = Convert.FromBase64String(saved.Hash)
+            };
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+
+        var account = _byEmail.GetOrAdd(saved.Email, restored);
+        return account.Id == saved.Id ? account : null;
     }
+
+    /// <summary>The value of the session cookie: who is signed in, signed and valid for 12 hours.</summary>
+    public string StartSession(UserAccount account) =>
+        Sign(new SignedSession(
+            SessionKind,
+            account.Id,
+            account.Name,
+            account.Email,
+            account.Role,
+            DateTimeOffset.UtcNow.Add(SessionLifetime).ToUnixTimeSeconds()));
 
     public UserAccount? FindSession(string? token)
     {
-        if (string.IsNullOrEmpty(token) || !_sessions.TryGetValue(token, out var session)) return null;
-        if (session.ExpiresUtc > DateTimeOffset.UtcNow) return session.Account;
-        _sessions.TryRemove(token, out _);
-        return null;
+        var session = Verify<SignedSession>(token);
+        if (session is null ||
+            session.Kind != SessionKind ||
+            session.Exp < DateTimeOffset.UtcNow.ToUnixTimeSeconds() ||
+            (session.Role != Roles.Freelancer && session.Role != Roles.Client))
+        {
+            return null;
+        }
+
+        return new UserAccount
+        {
+            Id = session.Id,
+            Name = session.Name ?? "",
+            Email = session.Email ?? "",
+            Role = session.Role
+        };
     }
 
-    public void EndSession(string? token)
+    private string Sign<T>(T payload)
     {
-        if (!string.IsNullOrEmpty(token)) _sessions.TryRemove(token, out _);
+        var body = ToBase64Url(JsonSerializer.SerializeToUtf8Bytes(payload));
+        var signature = ToBase64Url(HMACSHA256.HashData(_key, Encoding.ASCII.GetBytes(body)));
+        return body + "." + signature;
+    }
+
+    private T? Verify<T>(string? token) where T : class
+    {
+        if (string.IsNullOrEmpty(token) || token.Length > 4000) return null;
+
+        var dot = token.IndexOf('.');
+        if (dot <= 0 || dot == token.Length - 1) return null;
+
+        var body = token[..dot];
+        try
+        {
+            var given = FromBase64Url(token[(dot + 1)..]);
+            var expected = HMACSHA256.HashData(_key, Encoding.ASCII.GetBytes(body));
+            if (!CryptographicOperations.FixedTimeEquals(given, expected)) return null;
+            return JsonSerializer.Deserialize<T>(FromBase64Url(body));
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static string ToBase64Url(byte[] bytes) =>
+        Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private static byte[] FromBase64Url(string text)
+    {
+        var padded = text.Replace('-', '+').Replace('_', '/');
+        padded += (padded.Length % 4) switch
+        {
+            2 => "==",
+            3 => "=",
+            _ => ""
+        };
+        return Convert.FromBase64String(padded);
     }
 
     private static byte[] Hash(string password, byte[] salt) =>

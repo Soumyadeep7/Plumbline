@@ -17,12 +17,6 @@ type ProjectDraftDto =
       draftNotes: string
       draftId: string }
 
-type MeDto =
-    { loggedIn: bool
-      name: string
-      email: string
-      role: string }
-
 type TotalsDto =
     { awaitingCount: int
       awaitingAmount: float
@@ -83,9 +77,7 @@ type ProjectDto =
       paypalCaptureId: string option
       paypalRefundId: string option
       complaintReason: string option
-      verdict: VerdictDto option
-      uploadedBy: string
-      paidBy: string }
+      verdict: VerdictDto option }
 
 type AppConfig =
     { paypalClientId: string
@@ -191,15 +183,6 @@ type Banner = { Kind: BannerKind; Text: string }
 
 type Model =
     { InApp: bool
-      // Accounts: freelancers upload, clients pay and dispute.
-      Me: MeDto option
-      AuthOpen: bool
-      AuthSignUp: bool
-      AuthName: string
-      AuthEmail: string
-      AuthPassword: string
-      AuthRole: string
-      AfterAuth: Screen option
       Screen: Screen
       Config: AppConfig option
       Dashboard: DashboardDto option
@@ -228,17 +211,6 @@ type Model =
 type Msg =
     | SetScreen of Screen
     | EnterApp of Screen
-    | MeLoaded of MeDto
-    | OpenAuth of bool
-    | CloseAuth
-    | SetAuthName of string
-    | SetAuthEmail of string
-    | SetAuthPassword of string
-    | SetAuthRole of string
-    | SubmitAuth
-    | SignedIn of MeDto
-    | LogOut of bool
-    | LoggedOut of bool
     | LeaveApp
     | RefreshDashboard
     | DashboardLoaded of DashboardDto
@@ -271,35 +243,6 @@ type Msg =
 
 let private paypalContainerId = "paypal-buttons"
 
-let private signedOut =
-    { loggedIn = false
-      name = ""
-      email = ""
-      role = "" }
-
-let private currentRole (model: Model) =
-    match model.Me with
-    | Some me when me.loggedIn -> me.role
-    | _ -> ""
-
-let private isClient (model: Model) = currentRole model = "CLIENT"
-
-/// Which screens each kind of account can open. Freelancers can still look at a project's page.
-let private allowedFor (role: string) (screen: Screen) =
-    match screen with
-    | Freelancer -> role = "FREELANCER"
-    | Dispute -> role = "CLIENT"
-    | _ -> true
-
-let private homeScreen (role: string) =
-    if role = "CLIENT" then Client else Overview
-
-let private wrongRoleText (screen: Screen) =
-    match screen with
-    | Freelancer -> "Uploading work needs a freelancer account. Use Switch account to change."
-    | Dispute -> "Disputes need a client account. Use Switch account to change."
-    | _ -> "This page needs a different account. Use Switch account to change."
-
 let private errorText (ex: exn) : string =
     if isNull (box ex) || System.String.IsNullOrEmpty ex.Message then
         "Something went wrong. Check that the API is running."
@@ -323,7 +266,7 @@ let private notify (kind: BannerKind) (text: string) (model: Model) : Model * Cm
 
 let private mountPayPalCmd (model: Model) : Cmd<Msg> =
     match model.Screen, model.Config, model.Project with
-    | Client, Some cfg, Some p when cfg.paypalConfigured && p.status = "AWAITING_PAYMENT" && isClient model ->
+    | Client, Some cfg, Some p when cfg.paypalConfigured && p.status = "AWAITING_PAYMENT" ->
         Cmd.ofEffect (fun dispatch ->
             mountPayPalButtons (
                 paypalContainerId,
@@ -356,14 +299,6 @@ let init () : Model * Cmd<Msg> =
 
     let model =
         { InApp = false
-          Me = None
-          AuthOpen = false
-          AuthSignUp = false
-          AuthName = ""
-          AuthEmail = ""
-          AuthPassword = ""
-          AuthRole = ""
-          AfterAuth = None
           Screen = Overview
           Config = None
           Dashboard = None
@@ -394,14 +329,7 @@ let init () : Model * Cmd<Msg> =
             (fun o -> ConfigLoaded(unbox<AppConfig> o))
             (fun ex -> Failed(errorText ex))
 
-    let loadMe =
-        Cmd.OfPromise.either
-            (fun () -> apiGet "/api/auth/me")
-            ()
-            (fun o -> MeLoaded(unbox<MeDto> o))
-            (fun ex -> Failed(errorText ex))
-
-    model, Cmd.batch [ loadConfig; loadMe; Cmd.ofEffect (fun _ -> applyTheme (if light then "light" else "dark")) ]
+    model, Cmd.batch [ loadConfig; Cmd.ofEffect (fun _ -> applyTheme (if light then "light" else "dark")) ]
 
 // ---------------------------------------------------------------------------------------------
 // Update
@@ -414,136 +342,13 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
         next, screenCmd next
 
     | EnterApp screen ->
-        match model.Me with
-        | Some me when me.loggedIn ->
-            if allowedFor me.role screen then
-                let next =
-                    { model with
-                        InApp = true
-                        Screen = screen
-                        Banner = None }
-
-                next, screenCmd next
-            else
-                let next =
-                    { model with
-                        InApp = true
-                        Screen = homeScreen me.role }
-
-                let notified, speakCmd = notify Warning (wrongRoleText screen) next
-                notified, Cmd.batch [ speakCmd; screenCmd notified ]
-        | _ ->
-            // Not signed in: show the log-in form, then go where the person was heading.
-            { model with
-                AuthOpen = true
-                AuthSignUp = false
-                AfterAuth = Some screen
-                InApp = false
-                Banner = None },
-            Cmd.none
-
-    | MeLoaded me -> { model with Me = Some me }, Cmd.none
-
-    | OpenAuth signUp ->
-        { model with
-            AuthOpen = true
-            AuthSignUp = signUp
-            InApp = false
-            Banner = None },
-        Cmd.none
-
-    | CloseAuth ->
-        { model with
-            AuthOpen = false
-            AuthPassword = ""
-            AfterAuth = None
-            Banner = None },
-        Cmd.none
-
-    | SetAuthName value -> { model with AuthName = value }, Cmd.none
-    | SetAuthEmail value -> { model with AuthEmail = value }, Cmd.none
-    | SetAuthPassword value -> { model with AuthPassword = value }, Cmd.none
-    | SetAuthRole value -> { model with AuthRole = value }, Cmd.none
-
-    | SubmitAuth ->
-        if model.AuthEmail.Trim() = "" || model.AuthPassword = "" then
-            notify Danger "Enter your email and password." model
-        elif model.AuthSignUp && model.AuthName.Trim() = "" then
-            notify Danger "Enter your name." model
-        elif model.AuthSignUp && model.AuthRole = "" then
-            notify Danger "Choose whether this is a freelancer or a client account." model
-        else
-            let path, body =
-                if model.AuthSignUp then
-                    "/api/auth/signup",
-                    createObj
-                        [ "name" ==> model.AuthName
-                          "email" ==> model.AuthEmail
-                          "password" ==> model.AuthPassword
-                          "role" ==> model.AuthRole ]
-                else
-                    "/api/auth/login", createObj [ "email" ==> model.AuthEmail; "password" ==> model.AuthPassword ]
-
-            { model with
-                Busy = Some(if model.AuthSignUp then "Creating your account" else "Logging in")
-                Banner = None },
-            Cmd.OfPromise.either
-                (fun () -> apiPostJson (path, body))
-                ()
-                (fun o -> SignedIn(unbox<MeDto> o))
-                (fun ex -> Failed(errorText ex))
-
-    | SignedIn me ->
-        let target =
-            match model.AfterAuth with
-            | Some screen when allowedFor me.role screen -> screen
-            | _ -> homeScreen me.role
-
         let next =
             { model with
-                Me = Some me
-                Busy = None
-                AuthOpen = false
-                AuthPassword = ""
-                AfterAuth = None
                 InApp = true
-                Screen = target
-                Dashboard = None
-                Project = None
-                ProjectIdInput = "" }
+                Screen = screen
+                Banner = None }
 
-        let kind = if me.role = "CLIENT" then "client" else "freelancer"
-        let notified, speakCmd = notify Success ("Signed in as " + me.name + ", " + kind + " account.") next
-        notified, Cmd.batch [ speakCmd; screenCmd notified ]
-
-    | LogOut switchAccount ->
-        model,
-        Cmd.OfPromise.either
-            (fun () -> apiPostJson ("/api/auth/logout", createObj []))
-            ()
-            (fun _ -> LoggedOut switchAccount)
-            (fun ex -> Failed(errorText ex))
-
-    | LoggedOut switchAccount ->
-        let next =
-            { model with
-                Me = Some signedOut
-                InApp = false
-                Dashboard = None
-                Project = None
-                ProjectIdInput = ""
-                AuthOpen = switchAccount
-                AuthSignUp = false
-                AuthEmail = ""
-                AuthPassword = "" }
-
-        let text =
-            if switchAccount then
-                "Signed out. Log in with the other account, or sign up for one."
-            else
-                "You are signed out."
-
-        notify Info text next
+        next, screenCmd next
 
     | LeaveApp -> { model with InApp = false; Banner = None }, Cmd.none
 
@@ -841,18 +646,6 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
                  + v.reason)
                 next
         | None -> notify Info "The dispute was processed." next
-
-    | Failed message when message = "Log in to continue." ->
-        // The session is gone, for example because the server restarted and cleared it.
-        let next =
-            { model with
-                Busy = None
-                Me = Some signedOut
-                InApp = false
-                AuthOpen = true
-                AuthSignUp = false }
-
-        notify Warning "Your session ended, for example because the server restarted. Log in or sign up again." next
 
     | Failed message -> notify Danger message { model with Busy = None }
 
@@ -1170,14 +963,6 @@ let private clientView (model: Model) (dispatch: Msg -> unit) =
                                        prop.children
                                            [ Html.h3 [ prop.text p.title ]
                                              Html.p [ prop.text ("Price: $" + p.priceDisplay + " " + p.currency) ]
-                                             (if p.uploadedBy = "" then
-                                                  Html.none
-                                              else
-                                                  Html.p [ prop.className "hint"; prop.text ("Uploaded by " + p.uploadedBy) ])
-                                             (if p.paidBy = "" then
-                                                  Html.none
-                                              else
-                                                  Html.p [ prop.className "hint"; prop.text ("Paid by " + p.paidBy) ])
                                              statusPill p.status
                                              (match p.reviewDeadlineUtc with
                                               | Some deadline when p.status = "ESCROW_HELD" ->
@@ -1204,11 +989,6 @@ let private clientView (model: Model) (dispatch: Msg -> unit) =
                                                             + " with PayPal. The money is held in escrow, the full asset unlocks, and you get 24 hours to review it."
                                                         ) ]
                                                   (match model.Config with
-                                                   | _ when not (isClient model) ->
-                                                       Html.p
-                                                           [ prop.className "hint"
-                                                             prop.text
-                                                                 "Only a client account can pay. Use Switch account to pay as the client." ]
                                                    | Some cfg when cfg.paypalConfigured ->
                                                        Html.div
                                                            [ prop.key ("paypal-" + p.id)
@@ -1219,7 +999,7 @@ let private clientView (model: Model) (dispatch: Msg -> unit) =
                                                            [ prop.className "hint"
                                                              prop.text
                                                                  "PayPal is not configured on the API, so checkout is unavailable." ]) ] ]
-                                  | "ESCROW_HELD" when isClient model ->
+                                  | "ESCROW_HELD" ->
                                       Html.button
                                           [ prop.className "btn"
                                             prop.onClick (fun _ -> dispatch (SetScreen Dispute))
@@ -1403,24 +1183,16 @@ let private activityList (entries: ActivityDto[]) =
                                 Html.p [ prop.text entry.message ]
                                 Html.p [ prop.className "hint"; prop.text (localTime entry.at) ] ] ] ] ]
 
-let private emptyState (model: Model) (dispatch: Msg -> unit) =
-    let client = isClient model
-
+let private emptyState (dispatch: Msg -> unit) =
     Html.div
         [ prop.className "panel empty"
           prop.children
               [ Html.h3 [ prop.text "No projects yet" ]
-                Html.p
-                    [ prop.text (
-                          if client then
-                              "Projects you pay for appear here. Open one with the project ID the freelancer gave you."
-                          else
-                              "Upload a finished piece of work and it appears here with its escrow status."
-                      ) ]
+                Html.p [ prop.text "Upload a finished piece of work and it appears here with its escrow status." ]
                 Html.button
                     [ prop.className "btn btn-primary"
-                      prop.onClick (fun _ -> dispatch (SetScreen(if client then Client else Freelancer)))
-                      prop.text (if client then "Review and pay" else "Upload finished work") ] ] ]
+                      prop.onClick (fun _ -> dispatch (SetScreen Freelancer))
+                      prop.text "Upload finished work" ] ] ]
 
 let private overviewView (model: Model) (dispatch: Msg -> unit) =
     match model.Dashboard with
@@ -1437,7 +1209,7 @@ let private overviewView (model: Model) (dispatch: Msg -> unit) =
                                 statTile "Released to freelancers" d.totals.releasedAmount d.totals.releasedCount "Approved or review ended."
                                 statTile "Refunded to clients" d.totals.refundedAmount d.totals.refundedCount "Arbitrator ruled refund." ] ]
                     (if d.projects.Length = 0 then
-                         emptyState model dispatch
+                         emptyState dispatch
                      else
                          Html.div
                              [ prop.className "columns"
@@ -1472,7 +1244,7 @@ let private overviewView (model: Model) (dispatch: Msg -> unit) =
 let private projectsView (model: Model) (dispatch: Msg -> unit) =
     match model.Dashboard with
     | None -> Html.p [ prop.className "hint"; prop.text "Loading projects." ]
-    | Some d when d.projects.Length = 0 -> emptyState model dispatch
+    | Some d when d.projects.Length = 0 -> emptyState dispatch
     | Some d ->
         let search = model.Search.Trim().ToLower()
 
@@ -1681,42 +1453,11 @@ let private appView (model: Model) (dispatch: Msg -> unit) =
                                               prop.children
                                                   [ navItem model dispatch Overview "Overview"
                                                     navItem model dispatch Projects "Projects"
-                                                    if isClient model then
-                                                        navItem model dispatch Client "Review and pay"
-                                                        navItem model dispatch Dispute "Disputes"
-                                                    else
-                                                        navItem model dispatch Freelancer "New project"
+                                                    navItem model dispatch Freelancer "New project"
+                                                    navItem model dispatch Client "Review and pay"
+                                                    navItem model dispatch Dispute "Disputes"
                                                     navItem model dispatch Activity "Activity"
                                                     navItem model dispatch Settings "Settings and status" ] ] ] ]
-                            Html.div
-                                [ prop.className "sidebar-user"
-                                  prop.children
-                                      [ Html.p
-                                            [ prop.className "sidebar-user-name"
-                                              prop.text (
-                                                  match model.Me with
-                                                  | Some me when me.loggedIn -> me.name
-                                                  | _ -> "Not signed in"
-                                              ) ]
-                                        Html.p
-                                            [ prop.className "hint"
-                                              prop.text (
-                                                  if isClient model then
-                                                      "Client account"
-                                                  else
-                                                      "Freelancer account"
-                                              ) ]
-                                        Html.div
-                                            [ prop.className "sidebar-user-actions"
-                                              prop.children
-                                                  [ Html.button
-                                                        [ prop.className "btn btn-small"
-                                                          prop.onClick (fun _ -> dispatch (LogOut true))
-                                                          prop.text "Switch account" ]
-                                                    Html.button
-                                                        [ prop.className "btn btn-small"
-                                                          prop.onClick (fun _ -> dispatch (LogOut false))
-                                                          prop.text "Log out" ] ] ] ] ]
                             Html.div
                                 [ prop.className "sidebar-status"
                                   prop.children
@@ -1812,22 +1553,10 @@ let private siteView (model: Model) (dispatch: Msg -> unit) =
                                   prop.children
                                       [ voiceToggle model dispatch
                                         themeToggle model dispatch
-                                        match model.Me with
-                                        | Some me when me.loggedIn ->
-                                            Html.button
-                                                [ prop.className "btn btn-small btn-primary"
-                                                  prop.onClick (fun _ -> dispatch (EnterApp(homeScreen me.role)))
-                                                  prop.text "Open the dashboard" ]
-                                        | _ ->
-                                            Html.button
-                                                [ prop.className "btn btn-small"
-                                                  prop.onClick (fun _ -> dispatch (OpenAuth false))
-                                                  prop.text "Log in" ]
-
-                                            Html.button
-                                                [ prop.className "btn btn-small btn-primary"
-                                                  prop.onClick (fun _ -> dispatch (OpenAuth true))
-                                                  prop.text "Sign up" ] ] ] ] ]
+                                        Html.button
+                                            [ prop.className "btn btn-small btn-primary"
+                                              prop.onClick (fun _ -> dispatch (EnterApp Overview))
+                                              prop.text "Open the dashboard" ] ] ] ] ]
                 bannerView model.Banner
                 Html.main
                     [ prop.children
@@ -1942,138 +1671,6 @@ let private siteView (model: Model) (dispatch: Msg -> unit) =
                                 [ prop.text
                                       "Plumbline is a sandbox demo for the PayPal hackathon. Payments use PayPal Sandbox accounts, so no real money moves." ] ] ] ] ]
 
-// ---------------------------------------------------------------------------------------------
-// Log in and sign up
-// ---------------------------------------------------------------------------------------------
-
-let private roleOption (model: Model) (dispatch: Msg -> unit) (value: string) (title: string) (detail: string) =
-    let id = "role-" + value.ToLower()
-    let current = model.AuthRole = value
-
-    Html.label
-        [ prop.className (if current then "role-option role-current" else "role-option")
-          prop.htmlFor id
-          prop.children
-              [ Html.input
-                    [ prop.id id
-                      prop.custom ("type", "radio")
-                      prop.name "role"
-                      prop.value value
-                      prop.isChecked current
-                      prop.onChange (fun (_: Browser.Types.Event) -> dispatch (SetAuthRole value)) ]
-                Html.span
-                    [ prop.className "role-text"
-                      prop.children
-                          [ Html.span [ prop.className "role-title"; prop.text title ]
-                            Html.span [ prop.className "role-detail"; prop.text detail ] ] ] ] ]
-
-let private authView (model: Model) (dispatch: Msg -> unit) =
-    let busy = model.Busy.IsSome
-    let signUp = model.AuthSignUp
-
-    Html.div
-        [ prop.className "shell"
-          prop.children
-              [ Html.header
-                    [ prop.className "topbar"
-                      prop.children
-                          [ Html.button
-                                [ prop.className "brand brand-button"
-                                  aria "label" "Plumbline, back to the website"
-                                  prop.onClick (fun _ -> dispatch CloseAuth)
-                                  prop.text "Plumbline" ]
-                            Html.div
-                                [ prop.className "toggles"
-                                  prop.children [ voiceToggle model dispatch; themeToggle model dispatch ] ] ] ]
-                Html.main
-                    [ prop.className "auth"
-                      prop.children
-                          [ Html.h1 [ prop.className "page-title"; prop.text (if signUp then "Create an account" else "Log in") ]
-                            Html.p
-                                [ prop.className "hint"
-                                  prop.text
-                                      "Freelancers upload finished work. Clients review it, pay into escrow and open disputes. Use one account for each and switch between them at any time." ]
-                            Html.div
-                                [ prop.className "auth-tabs"
-                                  prop.children
-                                      [ Html.button
-                                            [ prop.className (if signUp then "tab" else "tab tab-current")
-                                              aria "pressed" (if signUp then "false" else "true")
-                                              prop.onClick (fun _ -> dispatch (OpenAuth false))
-                                              prop.text "Log in" ]
-                                        Html.button
-                                            [ prop.className (if signUp then "tab tab-current" else "tab")
-                                              aria "pressed" (if signUp then "true" else "false")
-                                              prop.onClick (fun _ -> dispatch (OpenAuth true))
-                                              prop.text "Sign up" ] ] ]
-                            bannerView model.Banner
-                            (match model.Busy with
-                             | Some text -> Html.p [ prop.className "busy"; prop.text (text + "...") ]
-                             | None -> Html.none)
-                            Html.form
-                                [ prop.className "auth-form"
-                                  prop.onSubmit (fun (ev: Browser.Types.Event) ->
-                                      ev.preventDefault ()
-                                      dispatch SubmitAuth)
-                                  prop.children
-                                      [ if signUp then
-                                            Html.fieldSet
-                                                [ prop.className "roles"
-                                                  prop.children
-                                                      [ Html.legend [ prop.text "I am signing up as" ]
-                                                        roleOption
-                                                            model
-                                                            dispatch
-                                                            "FREELANCER"
-                                                            "A freelancer"
-                                                            "I upload finished work and get paid when it matches the brief."
-                                                        roleOption
-                                                            model
-                                                            dispatch
-                                                            "CLIENT"
-                                                            "A client"
-                                                            "I review deliveries, pay into escrow and can open a dispute." ] ]
-
-                                            field
-                                                "auth-name"
-                                                "Your name"
-                                                ""
-                                                (Html.input
-                                                    [ prop.id "auth-name"
-                                                      prop.custom ("type", "text")
-                                                      prop.custom ("autoComplete", "name")
-                                                      prop.value model.AuthName
-                                                      prop.onChange (fun (v: string) -> dispatch (SetAuthName v)) ])
-                                        field
-                                            "auth-email"
-                                            "Email"
-                                            ""
-                                            (Html.input
-                                                [ prop.id "auth-email"
-                                                  prop.custom ("type", "email")
-                                                  prop.custom ("autoComplete", "email")
-                                                  prop.value model.AuthEmail
-                                                  prop.onChange (fun (v: string) -> dispatch (SetAuthEmail v)) ])
-                                        field
-                                            "auth-password"
-                                            "Password"
-                                            (if signUp then "At least 8 characters." else "")
-                                            (Html.input
-                                                [ prop.id "auth-password"
-                                                  prop.custom ("type", "password")
-                                                  prop.custom ("autoComplete", (if signUp then "new-password" else "current-password"))
-                                                  prop.value model.AuthPassword
-                                                  prop.onChange (fun (v: string) -> dispatch (SetAuthPassword v)) ])
-                                        Html.button
-                                            [ prop.className "btn btn-primary"
-                                              prop.custom ("type", "submit")
-                                              prop.disabled busy
-                                              prop.text (if signUp then "Create account" else "Log in") ] ] ]
-                            Html.p
-                                [ prop.className "hint"
-                                  prop.text
-                                      "This demo keeps accounts in the server's memory, like projects. They are cleared when the server restarts, so sign up again if your login stops working." ] ] ] ] ]
-
 let view (model: Model) (dispatch: Msg -> unit) =
     Html.div
         [ prop.children
@@ -2084,9 +1681,10 @@ let view (model: Model) (dispatch: Msg -> unit) =
                       aria "live" "polite"
                       aria "atomic" "true"
                       prop.text model.Announcement ]
-                (if model.InApp then appView model dispatch
-                 elif model.AuthOpen then authView model dispatch
-                 else siteView model dispatch) ] ]
+                (if model.InApp then
+                     appView model dispatch
+                 else
+                     siteView model dispatch) ] ]
 
 Program.mkProgram init update view
 |> Program.withReactSynchronous "root"

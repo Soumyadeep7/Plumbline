@@ -74,7 +74,9 @@ The website is public; the dashboard needs an account. **Sign up** asks whether 
 - **Freelancer**: New project (upload work, Claude autofill), and sees the projects they uploaded.
 - **Client**: Review and pay, Disputes, and sees the projects they paid for. Only the client who paid can dispute.
 
-The sidebar has **Switch account** and **Log out**, so a demo can upload as the freelancer, switch, and pay as the client. Accounts and sessions are kept in memory with salted PBKDF2 password hashes, so they are cleared when the API restarts, just like projects.
+The sidebar has **Switch account** and **Log out**, so a demo can upload as the freelancer, switch, and pay as the client.
+
+**Remembered accounts.** The free host wipes server memory on every restart, so each browser keeps a signed record of the accounts used in it (up to six, for 30 days). The log-in page lists them under *Accounts on this device* for one-click switching, and a normal password log-in sends the record so the server can restore the account. The session cookie is signed the same way, so you stay signed in across restarts for 12 hours. Records are signed with a key derived from `ACCOUNT_SECRET` if set, otherwise from `PAYPAL_SECRET`; changing that secret signs everyone out and invalidates saved accounts. Passwords are stored only as salted PBKDF2 hashes. Projects are still kept in memory and are lost on restart.
 
 ## Demo script
 
@@ -102,6 +104,7 @@ Payment confirmations and verdicts are spoken aloud (toggle in the header), anno
 | POST | `/api/projects/draft` | JSON `{ "text": "..." }`; Claude (`effort: low`) reads a client's message and returns a title, the requirements and the price if stated |
 | GET | `/api/dashboard` | totals by escrow state, all projects, the activity log and integration status (no asset content) |
 | POST | `/api/auth/signup`, `/api/auth/login`, `/api/auth/logout` | create an account (name, email, password, role `FREELANCER` or `CLIENT`), log in, log out |
+| POST | `/api/auth/remembered` | one-click log-in with a saved account record |
 | GET | `/api/auth/me` | who is signed in |
 | GET | `/api/config` | PayPal client ID and which keys are configured |
 
@@ -138,4 +141,4 @@ npm install --save-dev vite@5
 - **Review window**: if 24 hours pass without a dispute, the next read of the project marks it `COMPLETED`.
 - **Failures never move money**: if Claude returns no valid verdict, or PayPal rejects the refund, the project stays `ESCROW_HELD` and the dispute can be retried.
 - **Claude calls** send `model: claude-fable-5-2` with `output_config.effort` and no `temperature`, `top_p`, `top_k` or `tool_choice`. Requirements, asset and complaint are passed as tagged evidence, and the arbitrator is told to ignore instructions inside them.
-- **Accounts are demo-grade**: they live in memory, there is no email verification, password reset or rate limiting on login, and any signed-in client who has a project ID can open that project's preview.
+- **Accounts are demo-grade**: an account lives on the server only until it restarts and otherwise in the browsers that used it; there is no email verification, password reset or rate limiting on log-in, and any signed-in client who has a project ID can open that project's preview. Anyone using the same browser can switch into its saved accounts; use Remove on the log-in page to forget one.

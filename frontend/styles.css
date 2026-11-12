@@ -658,8 +658,6 @@ label {
 }
 
 input[type="text"],
-input[type="email"],
-input[type="password"],
 select,
 textarea {
   width: 100%;
@@ -672,8 +670,6 @@ textarea {
 }
 
 input[type="text"]:hover,
-input[type="email"]:hover,
-input[type="password"]:hover,
 textarea:hover {
   border-color: var(--text);
 }
@@ -733,22 +729,6 @@ pre {
   font-size: 0.95rem;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.id-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 0.75rem;
-}
-
-.id-row .plain {
-  flex: 0 1 auto;
-  margin: 0;
-}
-
-.id-row .btn {
-  margin: 0;
 }
 
 .plain {
@@ -915,33 +895,8 @@ pre {
   color: var(--on-brand);
 }
 
-.sidebar-user {
-  margin-top: auto;
-  padding: 1rem 0.75rem 0;
-  border-top: 1px solid var(--line);
-}
-
-.sidebar-user p {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.sidebar-user-name {
-  font-weight: 700;
-}
-
-.sidebar-user-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 0.6rem;
-}
-
-.sidebar-user-actions .btn {
-  margin: 0;
-}
-
 .sidebar-status {
+  margin-top: auto;
   padding: 1rem 0.75rem 0;
   border-top: 1px solid var(--line);
   color: var(--muted);
@@ -1208,11 +1163,6 @@ select {
   .sidebar-status {
     display: none;
   }
-
-  .sidebar-user {
-    margin-top: 0;
-    padding-top: 0.75rem;
-  }
 }
 
 footer {
@@ -1229,106 +1179,4 @@ footer {
     animation: none !important;
     scroll-behavior: auto !important;
   }
-}
-
-/* ---------- Log in and sign up ---------- */
-
-.auth {
-  max-width: 34rem;
-  padding: clamp(1rem, 4vw, 2.5rem) 0 2rem;
-}
-
-.auth .page-title {
-  font-size: clamp(2rem, 5vw, 2.75rem);
-}
-
-.auth-tabs {
-  display: flex;
-  gap: 0.5rem;
-  margin: 1.25rem 0;
-}
-
-.tab {
-  min-height: 2.75rem;
-  padding: 0.5rem 1.25rem;
-  background: transparent;
-  color: var(--text);
-  border: 2px solid var(--line);
-  border-radius: 6px;
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.tab:hover {
-  border-color: var(--text);
-}
-
-.tab-current,
-.tab-current:hover {
-  background: var(--brand);
-  border-color: var(--brand);
-  color: var(--on-brand);
-}
-
-.auth-form .field {
-  max-width: none;
-}
-
-.roles {
-  display: grid;
-  gap: 0.75rem;
-  margin: 1rem 0;
-  padding: 0;
-  border: 0;
-}
-
-.roles legend {
-  margin-bottom: 0.5rem;
-  padding: 0;
-  font-weight: 700;
-}
-
-.role-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  margin: 0;
-  padding: 0.9rem 1rem;
-  background: var(--surface);
-  border: 2px solid var(--line);
-  border-radius: 10px;
-  font-weight: 400;
-  cursor: pointer;
-}
-
-.role-option:hover {
-  border-color: var(--text);
-}
-
-.role-current,
-.role-current:hover {
-  border-color: var(--brand);
-}
-
-.role-option input {
-  width: 1.25rem;
-  height: 1.25rem;
-  margin: 0.15rem 0 0;
-  accent-color: var(--brand);
-}
-
-.role-text,
-.role-title,
-.role-detail {
-  display: block;
-}
-
-.role-title {
-  font-weight: 700;
-}
-
-.role-detail {
-  color: var(--muted);
-  font-size: 0.95rem;
 }
