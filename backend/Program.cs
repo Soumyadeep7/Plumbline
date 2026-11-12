@@ -9,7 +9,6 @@ builder.Services.AddCors(options =>
 builder.Services.AddHttpClient("paypal", client => client.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddHttpClient("claude", client => client.Timeout = TimeSpan.FromMinutes(5));
 builder.Services.AddSingleton<ProjectStore>();
-builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddSingleton<PayPalClient>();
 builder.Services.AddSingleton<ClaudeClient>();
 
@@ -18,52 +17,6 @@ app.UseCors();
 app.UseStaticFiles();
 
 var activityLog = app.Services.GetRequiredService<ProjectStore>();
-var sessionStore = app.Services.GetRequiredService<SessionStore>();
-
-// Behind a host's proxy the original scheme arrives in X-Forwarded-Proto.
-bool IsHttps(HttpRequest r) =>
-    string.Equals(r.Headers["X-Forwarded-Proto"].FirstOrDefault() ?? r.Scheme, "https", StringComparison.OrdinalIgnoreCase);
-
-// The address PayPal sends the browser back to after login. It must be listed as a Return URL
-// in the PayPal app. APP_BASE_URL overrides the address worked out from the request.
-string LoginCallbackUrl(HttpRequest r)
-{
-    var configured = Environment.GetEnvironmentVariable("APP_BASE_URL");
-    var baseUrl = string.IsNullOrWhiteSpace(configured)
-        ? $"{(IsHttps(r) ? "https" : "http")}://{r.Host}"
-        : configured.Trim().TrimEnd('/');
-    return baseUrl + "/api/auth/callback";
-}
-
-CookieOptions SessionCookie(HttpRequest r, TimeSpan lifetime) => new()
-{
-    HttpOnly = true,
-    Secure = IsHttps(r),
-    SameSite = SameSiteMode.Lax,
-    Path = "/",
-    MaxAge = lifetime
-};
-
-// Everything under /api needs a PayPal login, except the login endpoints and the public config.
-app.Use(async (context, next) =>
-{
-    var path = context.Request.Path;
-    if (path.StartsWithSegments("/api") &&
-        !path.StartsWithSegments("/api/auth") &&
-        !path.StartsWithSegments("/api/config"))
-    {
-        var session = sessionStore.Find(context.Request.Cookies[SessionStore.CookieName]);
-        if (session is null)
-        {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await context.Response.WriteAsJsonAsync(new { error = "Log in with PayPal to continue." });
-            return;
-        }
-        context.Items["user"] = session;
-    }
-
-    await next(context);
-});
 
 var supportedImageTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
@@ -132,8 +85,6 @@ object ToDto(Project p)
         reviewDeadlineUtc = p.ReviewDeadlineUtc,
         paypalCaptureId = p.PayPalCaptureId,
         paypalRefundId = p.PayPalRefundId,
-        uploadedBy = p.UploadedBy,
-        paidBy = p.PaidBy,
         complaintReason = p.ComplaintReason,
         verdict = p.Verdict is null
             ? null
@@ -148,61 +99,6 @@ object ToDto(Project p)
 // When hosted, the built frontend sits in wwwroot and is served by this same app. In local
 // development wwwroot does not exist and the Vite dev server serves the UI instead.
 app.MapFallbackToFile("index.html");
-
-// Log in with PayPal, step 1: send the browser to PayPal's login page.
-app.MapGet("/api/auth/login", (HttpRequest request, HttpResponse response, PayPalClient paypal) =>
-{
-    if (!paypal.IsConfigured)
-        return Results.Redirect("/?login=unavailable");
-
-    var state = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
-    response.Cookies.Append("plumbline_login_state", state, SessionCookie(request, TimeSpan.FromMinutes(10)));
-    return Results.Redirect(paypal.BuildLoginUrl(LoginCallbackUrl(request), state));
-});
-
-// Step 2: PayPal returns with a code. Swap it for the user's profile and start a session.
-app.MapGet("/api/auth/callback", async (HttpRequest request, HttpResponse response, PayPalClient paypal, SessionStore sessions, ILogger<Program> log, CancellationToken ct) =>
-{
-    var code = request.Query["code"].ToString();
-    var state = request.Query["state"].ToString();
-    var expectedState = request.Cookies["plumbline_login_state"];
-    response.Cookies.Delete("plumbline_login_state");
-
-    if (code.Length == 0 || string.IsNullOrEmpty(expectedState) || state != expectedState)
-        return Results.Redirect("/?login=failed");
-
-    try
-    {
-        var (userId, name, email) = await paypal.GetLoginUserAsync(code, ct);
-        var session = sessions.Create(userId, name, email);
-        response.Cookies.Append(SessionStore.CookieName, session.Token, SessionCookie(request, SessionStore.Lifetime));
-        return Results.Redirect("/?app=1");
-    }
-    catch (PayPalException ex)
-    {
-        log.LogWarning("PayPal login failed: {Message}", ex.Message);
-        return Results.Redirect("/?login=failed");
-    }
-});
-
-app.MapGet("/api/auth/me", (HttpRequest request, SessionStore sessions, PayPalClient paypal) =>
-{
-    var session = sessions.Find(request.Cookies[SessionStore.CookieName]);
-    return Results.Ok(new
-    {
-        loggedIn = session is not null,
-        name = session?.Name ?? "",
-        email = session?.Email ?? "",
-        loginAvailable = paypal.IsConfigured
-    });
-});
-
-app.MapPost("/api/auth/logout", (HttpRequest request, HttpResponse response, SessionStore sessions) =>
-{
-    sessions.Remove(request.Cookies[SessionStore.CookieName]);
-    response.Cookies.Delete(SessionStore.CookieName);
-    return Results.Ok(new { loggedIn = false });
-});
 
 // Public settings the browser needs. Secrets never leave the server.
 app.MapGet("/api/config", (PayPalClient paypal, ClaudeClient claude) => Results.Ok(new
@@ -309,7 +205,6 @@ app.MapPost("/api/projects/upload", async (HttpRequest request, ProjectStore sto
         return Fail(400, "Provide the asset as assetText or as an assetFile.");
     }
 
-    project.UploadedBy = (request.HttpContext.Items["user"] as UserSession)?.Name ?? "";
     store.Add(project);
     store.Log(project, ActivityKinds.Created,
         $"Project created at ${price.ToString("0.00", CultureInfo.InvariantCulture)}. The asset is stored and only a protected preview is visible.");
@@ -460,7 +355,7 @@ app.MapPost("/api/payments/create-order/{projectId:guid}", async (Guid projectId
 });
 
 // 4. Capture the approved order, hold the funds in escrow and open the 24-hour review window.
-app.MapPost("/api/payments/capture-order/{projectId:guid}/{orderId}", async (Guid projectId, string orderId, HttpContext http, ProjectStore store, PayPalClient paypal, CancellationToken ct) =>
+app.MapPost("/api/payments/capture-order/{projectId:guid}/{orderId}", async (Guid projectId, string orderId, ProjectStore store, PayPalClient paypal, CancellationToken ct) =>
 {
     if (!store.TryGet(projectId, out var project))
         return Fail(404, "No project with that ID.");
@@ -475,7 +370,6 @@ app.MapPost("/api/payments/capture-order/{projectId:guid}/{orderId}", async (Gui
 
         project.PayPalCaptureId = await paypal.CaptureOrderAsync(orderId, ct);
         project.Status = ProjectStatus.EscrowHeld;
-        project.PaidBy = (http.Items["user"] as UserSession)?.Name ?? "";
         project.ReviewDeadlineUtc = DateTimeOffset.UtcNow.Add(Limits.ReviewWindow);
         store.Log(project, ActivityKinds.Paid,
             $"Payment captured (PayPal capture {project.PayPalCaptureId}). Held in escrow for a 24-hour review.");

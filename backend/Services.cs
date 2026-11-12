@@ -79,9 +79,6 @@ public sealed class PayPalClient
     private readonly string _baseUrl =
         (Environment.GetEnvironmentVariable("PAYPAL_API_BASE") ?? "https://api-m.sandbox.paypal.com").TrimEnd('/');
 
-    private readonly string _webUrl =
-        (Environment.GetEnvironmentVariable("PAYPAL_WEB_BASE") ?? "https://www.sandbox.paypal.com").TrimEnd('/');
-
     private readonly SemaphoreSlim _tokenGate = new(1, 1);
     private string? _accessToken;
     private DateTimeOffset _tokenExpiresUtc = DateTimeOffset.MinValue;
@@ -92,80 +89,6 @@ public sealed class PayPalClient
 
     /// <summary>The client ID is public by design: the browser needs it to load PayPal's checkout buttons.</summary>
     public string ClientId => _clientId ?? "";
-
-    /// <summary>The "Log in with PayPal" page the browser is sent to. PayPal returns to redirectUri with a code.</summary>
-    public string BuildLoginUrl(string redirectUri, string state) =>
-        $"{_webUrl}/signin/authorize?flowEntry=static" +
-        $"&client_id={Uri.EscapeDataString(_clientId ?? "")}" +
-        "&response_type=code" +
-        $"&scope={Uri.EscapeDataString("openid profile email")}" +
-        $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
-        $"&state={Uri.EscapeDataString(state)}";
-
-    /// <summary>
-    /// Finishes "Log in with PayPal": swaps the authorization code for an access token
-    /// (POST /v1/oauth2/token) and reads the user's profile (GET /v1/identity/oauth2/userinfo).
-    /// </summary>
-    public async Task<(string UserId, string Name, string Email)> GetLoginUserAsync(string code, CancellationToken ct)
-    {
-        if (!IsConfigured)
-            throw new PayPalException("PayPal is not configured. Set PAYPAL_CLIENT_ID and PAYPAL_SECRET, then restart the API.");
-
-        var http = _httpFactory.CreateClient("paypal");
-
-        using var tokenRequest = new HttpRequestMessage(HttpMethod.Post, _baseUrl + "/v1/oauth2/token");
-        var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_clientId}:{_secret}"));
-        tokenRequest.Headers.Authorization = new AuthenticationHeaderValue("Basic", basic);
-        tokenRequest.Content = new FormUrlEncodedContent(new Dictionary<string, string>
-        {
-            ["grant_type"] = "authorization_code",
-            ["code"] = code
-        });
-
-        string accessToken;
-        using (var tokenResponse = await SendRawAsync(http, tokenRequest, ct))
-        {
-            var tokenText = await tokenResponse.Content.ReadAsStringAsync(ct);
-            if (!tokenResponse.IsSuccessStatusCode)
-                throw new PayPalException($"PayPal rejected the login code ({(int)tokenResponse.StatusCode}): {Describe(tokenText)}");
-
-            accessToken = ParseObject(tokenText)?["access_token"]?.GetValue<string>()
-                          ?? throw new PayPalException("PayPal did not return a login token.");
-        }
-
-        using var infoRequest = new HttpRequestMessage(
-            HttpMethod.Get, _baseUrl + "/v1/identity/oauth2/userinfo?schema=paypalv1.1");
-        infoRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-
-        using var infoResponse = await SendRawAsync(http, infoRequest, ct);
-        var infoText = await infoResponse.Content.ReadAsStringAsync(ct);
-        if (!infoResponse.IsSuccessStatusCode)
-            throw new PayPalException($"PayPal did not return the user's profile ({(int)infoResponse.StatusCode}): {Describe(infoText)}");
-
-        var info = ParseObject(infoText) ?? throw new PayPalException("PayPal returned an unreadable profile.");
-
-        var userId = info["user_id"]?.ToString() ?? info["payer_id"]?.ToString() ?? "";
-        if (userId.Length == 0)
-            throw new PayPalException("PayPal's profile had no user ID.");
-
-        var email = "";
-        if (info["emails"] is JsonArray emails)
-        {
-            foreach (var entry in emails)
-            {
-                var value = entry?["value"]?.ToString() ?? "";
-                if (value.Length == 0) continue;
-                if (email.Length == 0 || entry?["primary"]?.ToString().Equals("true", StringComparison.OrdinalIgnoreCase) == true)
-                    email = value;
-            }
-        }
-        if (email.Length == 0) email = info["email"]?.ToString() ?? "";
-
-        var name = info["name"]?.ToString() ?? "";
-        if (name.Length == 0) name = email.Length > 0 ? email : "PayPal user";
-
-        return (userId, name, email);
-    }
 
     /// <summary>POST /v2/checkout/orders with intent CAPTURE. Returns the PayPal order ID.</summary>
     public async Task<string> CreateOrderAsync(Project project, CancellationToken ct)
