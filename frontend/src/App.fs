@@ -16,6 +16,12 @@ type ProjectDraftDto =
       draftPrice: string
       draftNotes: string }
 
+type MeDto =
+    { loggedIn: bool
+      name: string
+      email: string
+      loginAvailable: bool }
+
 type TotalsDto =
     { awaitingCount: int
       awaitingAmount: float
@@ -76,7 +82,9 @@ type ProjectDto =
       paypalCaptureId: string option
       paypalRefundId: string option
       complaintReason: string option
-      verdict: VerdictDto option }
+      verdict: VerdictDto option
+      uploadedBy: string
+      paidBy: string }
 
 type AppConfig =
     { paypalClientId: string
@@ -146,6 +154,16 @@ let private savedLightTheme () : bool = jsNative
 [<Emit("new Date($0).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })")>]
 let private localDate (isoDate: string) : string = jsNative
 
+[<Emit("window.location.assign($0)")>]
+let private goTo (url: string) : unit = jsNative
+
+/// Reads one value from the page address, such as app=1 after a PayPal login.
+[<Emit("(new URLSearchParams(window.location.search).get($0) || '')")>]
+let private queryValue (name: string) : string = jsNative
+
+[<Emit("window.history.replaceState(null, '', window.location.pathname)")>]
+let private clearQuery () : unit = jsNative
+
 [<Emit("new Date($0).toLocaleString()")>]
 let private localTime (isoDate: string) : string = jsNative
 
@@ -172,6 +190,7 @@ type Banner = { Kind: BannerKind; Text: string }
 
 type Model =
     { InApp: bool
+      Me: MeDto option
       Screen: Screen
       Config: AppConfig option
       Dashboard: DashboardDto option
@@ -199,6 +218,9 @@ type Model =
 type Msg =
     | SetScreen of Screen
     | EnterApp of Screen
+    | MeLoaded of MeDto
+    | LogOut
+    | LoggedOut
     | LeaveApp
     | RefreshDashboard
     | DashboardLoaded of DashboardDto
@@ -285,6 +307,7 @@ let init () : Model * Cmd<Msg> =
 
     let model =
         { InApp = false
+          Me = None
           Screen = Overview
           Config = None
           Dashboard = None
@@ -314,7 +337,14 @@ let init () : Model * Cmd<Msg> =
             (fun o -> ConfigLoaded(unbox<AppConfig> o))
             (fun ex -> Failed(errorText ex))
 
-    model, Cmd.batch [ loadConfig; Cmd.ofEffect (fun _ -> applyTheme (if light then "light" else "dark")) ]
+    let loadMe =
+        Cmd.OfPromise.either
+            (fun () -> apiGet "/api/auth/me")
+            ()
+            (fun o -> MeLoaded(unbox<MeDto> o))
+            (fun ex -> Failed(errorText ex))
+
+    model, Cmd.batch [ loadConfig; loadMe; Cmd.ofEffect (fun _ -> applyTheme (if light then "light" else "dark")) ]
 
 // ---------------------------------------------------------------------------------------------
 // Update
@@ -327,13 +357,67 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
         next, screenCmd next
 
     | EnterApp screen ->
+        match model.Me with
+        | Some me when me.loggedIn ->
+            let next =
+                { model with
+                    InApp = true
+                    Screen = screen
+                    Banner = None }
+
+            next, screenCmd next
+        | Some me when not me.loginAvailable ->
+            notify
+                Danger
+                "PayPal login is not set up on the API. Add PAYPAL_CLIENT_ID and PAYPAL_SECRET, then restart it."
+                model
+        | _ ->
+            // Not signed in yet: PayPal's login page, then back to the dashboard.
+            model, Cmd.ofEffect (fun _ -> goTo "/api/auth/login")
+
+    | MeLoaded me ->
+        let next = { model with Me = Some me }
+        let login = queryValue "login"
+        let wantsApp = queryValue "app" = "1"
+
+        if login <> "" || wantsApp then
+            clearQuery ()
+
+        if login = "failed" then
+            notify Danger "The PayPal login did not complete. Try again." next
+        elif login = "unavailable" then
+            notify Danger "PayPal login is not set up on the API." next
+        elif me.loggedIn && wantsApp then
+            let inApp =
+                { next with
+                    InApp = true
+                    Screen = Overview }
+
+            let notified, speakCmd = notify Success ("Signed in with PayPal as " + me.name + ".") inApp
+            notified, Cmd.batch [ speakCmd; screenCmd notified ]
+        else
+            next, Cmd.none
+
+    | LogOut ->
+        model,
+        Cmd.OfPromise.either
+            (fun () -> apiPostJson ("/api/auth/logout", createObj []))
+            ()
+            (fun _ -> LoggedOut)
+            (fun ex -> Failed(errorText ex))
+
+    | LoggedOut ->
         let next =
             { model with
-                InApp = true
-                Screen = screen
-                Banner = None }
+                InApp = false
+                Dashboard = None
+                Project = None
+                Me =
+                    (match model.Me with
+                     | Some me -> Some { me with loggedIn = false; name = ""; email = "" }
+                     | None -> None) }
 
-        next, screenCmd next
+        notify Info "You are signed out." next
 
     | LeaveApp -> { model with InApp = false; Banner = None }, Cmd.none
 
@@ -911,6 +995,14 @@ let private clientView (model: Model) (dispatch: Msg -> unit) =
                                        prop.children
                                            [ Html.h3 [ prop.text p.title ]
                                              Html.p [ prop.text ("Price: $" + p.priceDisplay + " " + p.currency) ]
+                                             (if p.uploadedBy = "" then
+                                                  Html.none
+                                              else
+                                                  Html.p [ prop.className "hint"; prop.text ("Uploaded by " + p.uploadedBy) ])
+                                             (if p.paidBy = "" then
+                                                  Html.none
+                                              else
+                                                  Html.p [ prop.className "hint"; prop.text ("Paid by " + p.paidBy) ])
                                              statusPill p.status
                                              (match p.reviewDeadlineUtc with
                                               | Some deadline when p.status = "ESCROW_HELD" ->
@@ -1387,6 +1479,19 @@ let private appView (model: Model) (dispatch: Msg -> unit) =
                                                     navItem model dispatch Activity "Activity"
                                                     navItem model dispatch Settings "Settings and status" ] ] ] ]
                             Html.div
+                                [ prop.className "sidebar-user"
+                                  prop.children
+                                      [ Html.p
+                                            [ prop.text (
+                                                  match model.Me with
+                                                  | Some me when me.loggedIn -> "Signed in with PayPal as " + me.name
+                                                  | _ -> "Not signed in"
+                                              ) ]
+                                        Html.button
+                                            [ prop.className "btn btn-small"
+                                              prop.onClick (fun _ -> dispatch LogOut)
+                                              prop.text "Log out" ] ] ]
+                            Html.div
                                 [ prop.className "sidebar-status"
                                   prop.children
                                       [ Html.p
@@ -1482,7 +1587,12 @@ let private siteView (model: Model) (dispatch: Msg -> unit) =
                                         Html.button
                                             [ prop.className "btn btn-small btn-primary"
                                               prop.onClick (fun _ -> dispatch (EnterApp Overview))
-                                              prop.text "Open the dashboard" ] ] ] ] ]
+                                              prop.text (
+                                                  match model.Me with
+                                                  | Some me when me.loggedIn -> "Open the dashboard"
+                                                  | _ -> "Log in with PayPal"
+                                              ) ] ] ] ] ]
+                bannerView model.Banner
                 Html.main
                     [ prop.children
                           [ Html.section

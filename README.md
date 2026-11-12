@@ -39,6 +39,19 @@ export PAYPAL_SECRET="your-sandbox-secret"
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
+### Log in with PayPal
+
+The dashboard and every `/api` call except `/api/config` and `/api/auth/*` need a PayPal login. Set it up once in the PayPal Developer Dashboard:
+
+1. Open your sandbox app under **Apps & Credentials**.
+2. Under **Other features**, tick **Log in with PayPal** and open **Advanced settings**.
+3. Add a **Return URL** for each place you run the app, ending in `/api/auth/callback`:
+   - hosted: `https://YOUR-SERVICE.onrender.com/api/auth/callback`
+   - local: `http://127.0.0.1:5173/api/auth/callback` (then browse at `http://127.0.0.1:5173`, not `localhost`)
+4. Under the information to request, tick **Full name** and **Email**, then save.
+
+Log in with a sandbox account. If the address the app works out for itself is wrong (for example behind a custom domain), set `APP_BASE_URL` to the site's address, such as `https://YOUR-SERVICE.onrender.com`. Sessions last 8 hours and are cleared when the API restarts.
+
 ## 2. Run the backend (terminal 1)
 
 ```bash
@@ -92,6 +105,8 @@ Payment confirmations and verdicts are spoken aloud (toggle in the header), anno
 | POST | `/api/disputes/resolve/{projectId}` | JSON `{ "complaintReason": "..." }`; runs the arbitrator (`effort: high`) |
 | POST | `/api/projects/draft` | JSON `{ "text": "..." }`; Claude (`effort: low`) reads a client's message and returns a title, the requirements and the price if stated |
 | GET | `/api/dashboard` | totals by escrow state, all projects, the activity log and integration status (no asset content) |
+| GET | `/api/auth/login`, `/api/auth/callback` | Log in with PayPal (redirect to PayPal, then back with a code) |
+| GET / POST | `/api/auth/me`, `/api/auth/logout` | who is signed in; sign out |
 | GET | `/api/config` | PayPal client ID and which keys are configured |
 
 ## Hosting
@@ -127,4 +142,4 @@ npm install --save-dev vite@5
 - **Review window**: if 24 hours pass without a dispute, the next read of the project marks it `COMPLETED`.
 - **Failures never move money**: if Claude returns no valid verdict, or PayPal rejects the refund, the project stays `ESCROW_HELD` and the dispute can be retried.
 - **Claude calls** send `model: claude-fable-5-2` with `output_config.effort` and no `temperature`, `top_p`, `top_k` or `tool_choice`. Requirements, asset and complaint are passed as tagged evidence, and the arbitrator is told to ignore instructions inside them.
-- **No login**: the dashboard lists every project and anyone can open them. Add authentication before using this beyond a demo.
+- **Login, not ownership**: you must sign in with PayPal to use the app, and each project records who uploaded it and who paid. Every signed-in user can still see and open every project; per-user access rules are not built.

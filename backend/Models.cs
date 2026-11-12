@@ -55,6 +55,10 @@ public sealed class Project
     public List<string> PayPalOrderIds { get; } = new();
     public string? PayPalCaptureId { get; set; }
     public string? PayPalRefundId { get; set; }
+
+    // Names of the PayPal users who uploaded the work and who paid for it.
+    public string UploadedBy { get; set; } = "";
+    public string PaidBy { get; set; } = "";
     public DateTimeOffset? ReviewDeadlineUtc { get; set; }
 
     // Claude output.
@@ -81,6 +85,39 @@ public sealed record ProjectDraft(string Title, string Requirements, string Pric
 
 /// <summary>Body of POST /api/disputes/resolve/{projectId}.</summary>
 public sealed record DisputeRequest(string? ComplaintReason);
+
+/// <summary>A signed-in PayPal user. The token is the value of the session cookie.</summary>
+public sealed record UserSession(string Token, string PayPalUserId, string Name, string Email, DateTimeOffset ExpiresUtc);
+
+/// <summary>In-memory sessions created by "Log in with PayPal". Cleared when the API restarts.</summary>
+public sealed class SessionStore
+{
+    public const string CookieName = "plumbline_session";
+    public static readonly TimeSpan Lifetime = TimeSpan.FromHours(8);
+
+    private readonly ConcurrentDictionary<string, UserSession> _sessions = new();
+
+    public UserSession Create(string payPalUserId, string name, string email)
+    {
+        var token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+        var session = new UserSession(token, payPalUserId, name, email, DateTimeOffset.UtcNow.Add(Lifetime));
+        _sessions[token] = session;
+        return session;
+    }
+
+    public UserSession? Find(string? token)
+    {
+        if (string.IsNullOrEmpty(token) || !_sessions.TryGetValue(token, out var session)) return null;
+        if (session.ExpiresUtc > DateTimeOffset.UtcNow) return session;
+        _sessions.TryRemove(token, out _);
+        return null;
+    }
+
+    public void Remove(string? token)
+    {
+        if (!string.IsNullOrEmpty(token)) _sessions.TryRemove(token, out _);
+    }
+}
 
 /// <summary>One line of the activity log shown on the dashboard.</summary>
 public sealed record ActivityEntry(DateTimeOffset At, Guid ProjectId, string ProjectTitle, string Kind, string Message);
