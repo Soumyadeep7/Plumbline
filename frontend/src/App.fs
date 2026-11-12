@@ -152,6 +152,10 @@ let private saveVoice (on: bool) : unit = jsNative
 [<Emit("new Date($0).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })")>]
 let private localDate (isoDate: string) : string = jsNative
 
+/// Copies text to the clipboard. Falls back to a hidden text box where the Clipboard API is missing.
+[<Emit("(navigator.clipboard && window.isSecureContext ? navigator.clipboard.writeText($0) : new Promise(function (ok, fail) { var t = document.createElement('textarea'); t.value = $0; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.select(); var done = document.execCommand('copy'); document.body.removeChild(t); if (done) { ok(); } else { fail(new Error('copy failed')); } }))")>]
+let private copyText (text: string) : JS.Promise<unit> = jsNative
+
 [<Emit("new Date($0).toLocaleString()")>]
 let private localTime (isoDate: string) : string = jsNative
 
@@ -225,6 +229,8 @@ type Msg =
     | SubmitUpload
     | Uploaded of ProjectDto
     | SetProjectIdInput of string
+    | CopyProjectId of string
+    | ProjectIdCopied
     | LoadProject
     | ProjectLoaded of ProjectDto
     | PaymentCaptured of ProjectDto
@@ -510,6 +516,16 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
             next
 
     | SetProjectIdInput value -> { model with ProjectIdInput = value }, Cmd.none
+
+    | CopyProjectId projectId ->
+        model,
+        Cmd.OfPromise.either
+            copyText
+            projectId
+            (fun _ -> ProjectIdCopied)
+            (fun _ -> Failed "The project ID could not be copied. Select it and press Ctrl+C instead.")
+
+    | ProjectIdCopied -> notify Success "Project ID copied. Paste it to your client." model
 
     | LoadProject ->
         let id = model.ProjectIdInput.Trim()
@@ -880,7 +896,15 @@ let private freelancerView (model: Model) (dispatch: Msg -> unit) =
                                [ Html.h3 [ prop.text "Current project" ]
                                  Html.p [ prop.text (p.title + " - $" + p.priceDisplay + " " + p.currency) ]
                                  Html.p [ prop.text "Project ID to share with your client:" ]
-                                 Html.pre [ prop.className "plain"; prop.tabIndex 0; prop.text p.id ]
+                                 Html.div
+                                     [ prop.className "id-row"
+                                       prop.children
+                                           [ Html.pre [ prop.className "plain"; prop.tabIndex 0; prop.text p.id ]
+                                             Html.button
+                                                 [ prop.className "btn btn-small"
+                                                   aria "label" "Copy the project ID"
+                                                   prop.onClick (fun _ -> dispatch (CopyProjectId p.id))
+                                                   prop.text "Copy ID" ] ] ]
                                  statusPill p.status
                                  Html.button
                                      [ prop.className "btn"
@@ -898,7 +922,7 @@ let private clientView (model: Model) (dispatch: Msg -> unit) =
                 field
                     "project-id"
                     "Project ID"
-                    "The freelancer gives you this ID."
+                    "The freelancer gives you this ID. It looks like PL-7K3Q9X."
                     (Html.input
                         [ prop.id "project-id"
                           prop.custom ("type", "text")
@@ -1209,7 +1233,7 @@ let private projectsView (model: Model) (dispatch: Msg -> unit) =
             d.projects
             |> Array.filter (fun (row: ProjectRowDto) ->
                 (model.StatusFilter = "ALL" || row.status = model.StatusFilter)
-                && (search = "" || row.title.ToLower().Contains(search)))
+                && (search = "" || (row.title.ToLower().Contains(search) || row.id.ToLower().Contains(search))))
 
         Html.div
             [ prop.children
@@ -1219,7 +1243,7 @@ let private projectsView (model: Model) (dispatch: Msg -> unit) =
                               [ Html.div
                                     [ prop.className "filter"
                                       prop.children
-                                          [ Html.label [ prop.htmlFor "search"; prop.text "Search by title" ]
+                                          [ Html.label [ prop.htmlFor "search"; prop.text "Search by title or ID" ]
                                             Html.input
                                                 [ prop.id "search"
                                                   prop.custom ("type", "text")

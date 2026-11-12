@@ -66,7 +66,7 @@ object ToDto(Project p)
 
     return new
     {
-        id = p.Id,
+        id = p.Code,
         title = p.Title,
         priceUsd = p.PriceUsd,
         priceDisplay = p.PriceUsd.ToString("0.00", CultureInfo.InvariantCulture),
@@ -205,7 +205,7 @@ app.MapPost("/api/projects/upload", async (HttpRequest request, ProjectStore sto
         return Fail(400, "Provide the asset as assetText or as an assetFile.");
     }
 
-    store.Add(project);
+    store.Add(project, form["projectId"].ToString());
     store.Log(project, ActivityKinds.Created,
         $"Project created at ${price.ToString("0.00", CultureInfo.InvariantCulture)}. The asset is stored and only a protected preview is visible.");
     return Results.Ok(ToDto(project));
@@ -229,7 +229,9 @@ app.MapPost("/api/projects/draft", async (ProjectDraftRequest body, ClaudeClient
             draftTitle = draft.Title,
             draftRequirements = draft.Requirements,
             draftPrice = draft.Price,
-            draftNotes = draft.Notes
+            draftNotes = draft.Notes,
+            // Shown in the form straight away and kept when the project is uploaded.
+            draftId = ProjectStore.MakeCode(draft.Title)
         });
     }
     catch (ClaudeException ex)
@@ -239,7 +241,7 @@ app.MapPost("/api/projects/draft", async (ProjectDraftRequest body, ClaudeClient
 });
 
 // 2. Protected preview while unpaid; full asset once paid. Includes Claude's accessible summary.
-app.MapGet("/api/projects/{id:guid}", async (Guid id, ProjectStore store, ClaudeClient claude, ILogger<Program> log, CancellationToken ct) =>
+app.MapGet("/api/projects/{id}", async (string id, ProjectStore store, ClaudeClient claude, ILogger<Program> log, CancellationToken ct) =>
 {
     if (!store.TryGet(id, out var project))
         return Fail(404, "No project with that ID. Projects are kept in memory and are cleared when the API restarts.");
@@ -302,7 +304,7 @@ app.MapGet("/api/dashboard", (ProjectStore store, PayPalClient paypal, ClaudeCli
         },
         projects = projects.Select(p => new
         {
-            id = p.Id,
+            id = p.Code,
             title = p.Title,
             priceDisplay = p.PriceUsd.ToString("0.00", CultureInfo.InvariantCulture),
             status = p.Status,
@@ -328,7 +330,7 @@ app.MapGet("/api/dashboard", (ProjectStore store, PayPalClient paypal, ClaudeCli
 });
 
 // 3. Create a PayPal Sandbox order with intent CAPTURE.
-app.MapPost("/api/payments/create-order/{projectId:guid}", async (Guid projectId, ProjectStore store, PayPalClient paypal, CancellationToken ct) =>
+app.MapPost("/api/payments/create-order/{projectId}", async (string projectId, ProjectStore store, PayPalClient paypal, CancellationToken ct) =>
 {
     if (!store.TryGet(projectId, out var project))
         return Fail(404, "No project with that ID.");
@@ -355,7 +357,7 @@ app.MapPost("/api/payments/create-order/{projectId:guid}", async (Guid projectId
 });
 
 // 4. Capture the approved order, hold the funds in escrow and open the 24-hour review window.
-app.MapPost("/api/payments/capture-order/{projectId:guid}/{orderId}", async (Guid projectId, string orderId, ProjectStore store, PayPalClient paypal, CancellationToken ct) =>
+app.MapPost("/api/payments/capture-order/{projectId}/{orderId}", async (string projectId, string orderId, ProjectStore store, PayPalClient paypal, CancellationToken ct) =>
 {
     if (!store.TryGet(projectId, out var project))
         return Fail(404, "No project with that ID.");
@@ -386,7 +388,7 @@ app.MapPost("/api/payments/capture-order/{projectId:guid}/{orderId}", async (Gui
 });
 
 // 5. Claude Fable 5.2 Arbitrator Protocol: audit the delivery, then release or refund.
-app.MapPost("/api/disputes/resolve/{projectId:guid}", async (Guid projectId, DisputeRequest body, ProjectStore store, ClaudeClient claude, PayPalClient paypal, CancellationToken ct) =>
+app.MapPost("/api/disputes/resolve/{projectId}", async (string projectId, DisputeRequest body, ProjectStore store, ClaudeClient claude, PayPalClient paypal, CancellationToken ct) =>
 {
     if (!store.TryGet(projectId, out var project))
         return Fail(404, "No project with that ID.");

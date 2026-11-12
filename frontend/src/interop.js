@@ -83,6 +83,7 @@ export async function uploadProject(fields, file) {
   form.append("title", fields.title ?? "");
   form.append("requirementsText", fields.requirementsText ?? "");
   form.append("priceUsd", fields.priceUsd ?? "");
+  form.append("projectId", fields.projectId ?? "");
 
   if (file) {
     form.append("assetFile", file, file.name);
