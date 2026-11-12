@@ -9,6 +9,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddHttpClient("paypal", client => client.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddHttpClient("claude", client => client.Timeout = TimeSpan.FromMinutes(5));
 builder.Services.AddSingleton<ProjectStore>();
+builder.Services.AddSingleton<AccountStore>();
 builder.Services.AddSingleton<PayPalClient>();
 builder.Services.AddSingleton<ClaudeClient>();
 
@@ -17,6 +18,43 @@ app.UseCors();
 app.UseStaticFiles();
 
 var activityLog = app.Services.GetRequiredService<ProjectStore>();
+var accounts = app.Services.GetRequiredService<AccountStore>();
+
+// Behind a host's proxy the original scheme arrives in X-Forwarded-Proto.
+bool IsHttps(HttpRequest r) =>
+    string.Equals(r.Headers["X-Forwarded-Proto"].FirstOrDefault() ?? r.Scheme, "https", StringComparison.OrdinalIgnoreCase);
+
+CookieOptions SessionCookie(HttpRequest r) => new()
+{
+    HttpOnly = true,
+    Secure = IsHttps(r),
+    SameSite = SameSiteMode.Lax,
+    Path = "/",
+    MaxAge = AccountStore.SessionLifetime
+};
+
+UserAccount? CurrentUser(HttpContext http) => http.Items["user"] as UserAccount;
+
+// Everything under /api needs a signed-in account, except signing in itself and the public config.
+app.Use(async (context, next) =>
+{
+    var path = context.Request.Path;
+    if (path.StartsWithSegments("/api") &&
+        !path.StartsWithSegments("/api/auth") &&
+        !path.StartsWithSegments("/api/config"))
+    {
+        var user = accounts.FindSession(context.Request.Cookies[AccountStore.CookieName]);
+        if (user is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await context.Response.WriteAsJsonAsync(new { error = "Log in to continue." });
+            return;
+        }
+        context.Items["user"] = user;
+    }
+
+    await next(context);
+});
 
 var supportedImageTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
@@ -29,6 +67,18 @@ var supportedImageTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 
 IResult Fail(int statusCode, string message) =>
     Results.Json(new { error = message }, statusCode: statusCode);
+
+// Returns a 403 result when the signed-in account does not have the given role.
+IResult? RequireRole(HttpContext http, string role, string message) =>
+    CurrentUser(http)?.Role == role ? null : Fail(403, message);
+
+object MeDto(UserAccount? user) => new
+{
+    loggedIn = user is not null,
+    name = user?.Name ?? "",
+    email = user?.Email ?? "",
+    role = user?.Role ?? ""
+};
 
 // Once the 24-hour review window passes without a dispute, escrow is released to the freelancer.
 void ExpireReviewWindow(Project p)
@@ -85,6 +135,8 @@ object ToDto(Project p)
         reviewDeadlineUtc = p.ReviewDeadlineUtc,
         paypalCaptureId = p.PayPalCaptureId,
         paypalRefundId = p.PayPalRefundId,
+        uploadedBy = p.UploadedBy,
+        paidBy = p.PaidBy,
         complaintReason = p.ComplaintReason,
         verdict = p.Verdict is null
             ? null
@@ -100,6 +152,37 @@ object ToDto(Project p)
 // development wwwroot does not exist and the Vite dev server serves the UI instead.
 app.MapFallbackToFile("index.html");
 
+// Accounts: sign up as a freelancer or a client, log in, log out, and ask who is signed in.
+app.MapPost("/api/auth/signup", (SignUpRequest body, HttpRequest request, HttpResponse response) =>
+{
+    var (account, error) = accounts.SignUp(body.Name, body.Email, body.Password, body.Role);
+    if (account is null)
+        return Fail(400, error);
+
+    response.Cookies.Append(AccountStore.CookieName, accounts.StartSession(account), SessionCookie(request));
+    return Results.Ok(MeDto(account));
+});
+
+app.MapPost("/api/auth/login", (LogInRequest body, HttpRequest request, HttpResponse response) =>
+{
+    var account = accounts.LogIn(body.Email, body.Password);
+    if (account is null)
+        return Fail(401, "That email and password do not match an account. Accounts are cleared when the server restarts, so you may need to sign up again.");
+
+    response.Cookies.Append(AccountStore.CookieName, accounts.StartSession(account), SessionCookie(request));
+    return Results.Ok(MeDto(account));
+});
+
+app.MapPost("/api/auth/logout", (HttpRequest request, HttpResponse response) =>
+{
+    accounts.EndSession(request.Cookies[AccountStore.CookieName]);
+    response.Cookies.Delete(AccountStore.CookieName);
+    return Results.Ok(MeDto(null));
+});
+
+app.MapGet("/api/auth/me", (HttpRequest request) =>
+    Results.Ok(MeDto(accounts.FindSession(request.Cookies[AccountStore.CookieName]))));
+
 // Public settings the browser needs. Secrets never leave the server.
 app.MapGet("/api/config", (PayPalClient paypal, ClaudeClient claude) => Results.Ok(new
 {
@@ -113,6 +196,9 @@ app.MapGet("/api/config", (PayPalClient paypal, ClaudeClient claude) => Results.
 //    multipart/form-data fields: title, requirementsText, priceUsd, assetText | assetFile, previewImage (optional).
 app.MapPost("/api/projects/upload", async (HttpRequest request, ProjectStore store, CancellationToken ct) =>
 {
+    if (RequireRole(request.HttpContext, Roles.Freelancer, "Only freelancer accounts can upload work. Switch to a freelancer account.") is { } denied)
+        return denied;
+
     if (!request.HasFormContentType)
         return Fail(400, "Send the upload as multipart/form-data.");
 
@@ -205,6 +291,9 @@ app.MapPost("/api/projects/upload", async (HttpRequest request, ProjectStore sto
         return Fail(400, "Provide the asset as assetText or as an assetFile.");
     }
 
+    var uploader = CurrentUser(request.HttpContext);
+    project.UploadedById = uploader?.Id;
+    project.UploadedBy = uploader?.Name ?? "";
     store.Add(project, form["projectId"].ToString());
     store.Log(project, ActivityKinds.Created,
         $"Project created at ${price.ToString("0.00", CultureInfo.InvariantCulture)}. The asset is stored and only a protected preview is visible.");
@@ -213,8 +302,11 @@ app.MapPost("/api/projects/upload", async (HttpRequest request, ProjectStore sto
 
 // Form autofill: Claude (effort low) reads the client's message and returns a title, the
 // requirements in the client's own words and the price if one is stated. Nothing is stored.
-app.MapPost("/api/projects/draft", async (ProjectDraftRequest body, ClaudeClient claude, CancellationToken ct) =>
+app.MapPost("/api/projects/draft", async (ProjectDraftRequest body, HttpContext http, ClaudeClient claude, CancellationToken ct) =>
 {
+    if (RequireRole(http, Roles.Freelancer, "Only freelancer accounts can create projects. Switch to a freelancer account.") is { } denied)
+        return denied;
+
     var text = (body.Text ?? "").Trim();
     if (text.Length == 0)
         return Fail(400, "text is required.");
@@ -274,9 +366,16 @@ app.MapGet("/api/projects/{id}", async (string id, ProjectStore store, ClaudeCli
 
 // Dashboard: totals by escrow state, every project (newest first), recent activity and
 // which integrations are configured. Never includes asset content.
-app.MapGet("/api/dashboard", (ProjectStore store, PayPalClient paypal, ClaudeClient claude) =>
+app.MapGet("/api/dashboard", (HttpContext http, ProjectStore store, PayPalClient paypal, ClaudeClient claude) =>
 {
-    var projects = store.All.OrderByDescending(p => p.CreatedUtc).ToList();
+    // Freelancers see the projects they uploaded; clients see the projects they paid for.
+    var me = CurrentUser(http);
+    var projects = store.All
+        .Where(p => me is not null &&
+                    (me.Role == Roles.Freelancer ? p.UploadedById == me.Id : p.PaidById == me.Id))
+        .OrderByDescending(p => p.CreatedUtc)
+        .ToList();
+    var visibleCodes = projects.Select(p => p.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     foreach (var p in projects)
     {
@@ -313,7 +412,7 @@ app.MapGet("/api/dashboard", (ProjectStore store, PayPalClient paypal, ClaudeCli
             verdict = p.Verdict?.Verdict,
             matchScore = p.Verdict?.MatchScore
         }).ToList(),
-        activity = store.RecentActivity(50).Select(entry => new
+        activity = store.RecentActivity(200).Where(entry => visibleCodes.Contains(entry.ProjectId)).Take(50).Select(entry => new
         {
             at = entry.At,
             projectId = entry.ProjectId,
@@ -330,8 +429,11 @@ app.MapGet("/api/dashboard", (ProjectStore store, PayPalClient paypal, ClaudeCli
 });
 
 // 3. Create a PayPal Sandbox order with intent CAPTURE.
-app.MapPost("/api/payments/create-order/{projectId}", async (string projectId, ProjectStore store, PayPalClient paypal, CancellationToken ct) =>
+app.MapPost("/api/payments/create-order/{projectId}", async (string projectId, HttpContext http, ProjectStore store, PayPalClient paypal, CancellationToken ct) =>
 {
+    if (RequireRole(http, Roles.Client, "Only client accounts can pay. Switch to a client account.") is { } denied)
+        return denied;
+
     if (!store.TryGet(projectId, out var project))
         return Fail(404, "No project with that ID.");
 
@@ -357,8 +459,11 @@ app.MapPost("/api/payments/create-order/{projectId}", async (string projectId, P
 });
 
 // 4. Capture the approved order, hold the funds in escrow and open the 24-hour review window.
-app.MapPost("/api/payments/capture-order/{projectId}/{orderId}", async (string projectId, string orderId, ProjectStore store, PayPalClient paypal, CancellationToken ct) =>
+app.MapPost("/api/payments/capture-order/{projectId}/{orderId}", async (string projectId, string orderId, HttpContext http, ProjectStore store, PayPalClient paypal, CancellationToken ct) =>
 {
+    if (RequireRole(http, Roles.Client, "Only client accounts can pay. Switch to a client account.") is { } denied)
+        return denied;
+
     if (!store.TryGet(projectId, out var project))
         return Fail(404, "No project with that ID.");
 
@@ -372,6 +477,9 @@ app.MapPost("/api/payments/capture-order/{projectId}/{orderId}", async (string p
 
         project.PayPalCaptureId = await paypal.CaptureOrderAsync(orderId, ct);
         project.Status = ProjectStatus.EscrowHeld;
+        var payer = CurrentUser(http);
+        project.PaidById = payer?.Id;
+        project.PaidBy = payer?.Name ?? "";
         project.ReviewDeadlineUtc = DateTimeOffset.UtcNow.Add(Limits.ReviewWindow);
         store.Log(project, ActivityKinds.Paid,
             $"Payment captured (PayPal capture {project.PayPalCaptureId}). Held in escrow for a 24-hour review.");
@@ -388,8 +496,11 @@ app.MapPost("/api/payments/capture-order/{projectId}/{orderId}", async (string p
 });
 
 // 5. Claude Fable 5.2 Arbitrator Protocol: audit the delivery, then release or refund.
-app.MapPost("/api/disputes/resolve/{projectId}", async (string projectId, DisputeRequest body, ProjectStore store, ClaudeClient claude, PayPalClient paypal, CancellationToken ct) =>
+app.MapPost("/api/disputes/resolve/{projectId}", async (string projectId, DisputeRequest body, HttpContext http, ProjectStore store, ClaudeClient claude, PayPalClient paypal, CancellationToken ct) =>
 {
+    if (RequireRole(http, Roles.Client, "Only client accounts can open a dispute. Switch to a client account.") is { } denied)
+        return denied;
+
     if (!store.TryGet(projectId, out var project))
         return Fail(404, "No project with that ID.");
 
@@ -414,6 +525,8 @@ app.MapPost("/api/disputes/resolve/{projectId}", async (string projectId, Disput
             });
         if (project.PayPalCaptureId is null)
             return Fail(409, "This project has no captured payment to act on.");
+        if (project.PaidById != CurrentUser(http)?.Id)
+            return Fail(403, "Only the client who paid for this project can dispute it.");
 
         // No verdict means no money moves: any Claude failure leaves the funds in escrow.
         var verdict = await claude.ArbitrateAsync(project, complaint, ct);

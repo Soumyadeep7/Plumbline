@@ -67,6 +67,15 @@ PowerShell `$env:DOTNET_ROLL_FORWARD = "Major"`, cmd `set DOTNET_ROLL_FORWARD=Ma
 - **Website**: the landing page at `http://localhost:5173` with the tagline, how it works, why it is fair and what it is built with.
 - **Dashboard app** (press *Open the dashboard*): a sidebar with Overview, Projects, New project, Review and pay, Disputes, Activity, and Settings and status. Overview shows the money awaiting payment, held in escrow, released and refunded, plus the newest projects and activity. Projects has search and a status filter.
 
+## Accounts
+
+The website is public; the dashboard needs an account. **Sign up** asks whether the account is a freelancer or a client:
+
+- **Freelancer**: New project (upload work, Claude autofill), and sees the projects they uploaded.
+- **Client**: Review and pay, Disputes, and sees the projects they paid for. Only the client who paid can dispute.
+
+The sidebar has **Switch account** and **Log out**, so a demo can upload as the freelancer, switch, and pay as the client. Accounts and sessions are kept in memory with salted PBKDF2 password hashes, so they are cleared when the API restarts, just like projects.
+
 ## Demo script
 
 All three steps are in the dashboard app's sidebar.
@@ -92,6 +101,8 @@ Payment confirmations and verdicts are spoken aloud (toggle in the header), anno
 | POST | `/api/disputes/resolve/{projectId}` | JSON `{ "complaintReason": "..." }`; runs the arbitrator (`effort: high`) |
 | POST | `/api/projects/draft` | JSON `{ "text": "..." }`; Claude (`effort: low`) reads a client's message and returns a title, the requirements and the price if stated |
 | GET | `/api/dashboard` | totals by escrow state, all projects, the activity log and integration status (no asset content) |
+| POST | `/api/auth/signup`, `/api/auth/login`, `/api/auth/logout` | create an account (name, email, password, role `FREELANCER` or `CLIENT`), log in, log out |
+| GET | `/api/auth/me` | who is signed in |
 | GET | `/api/config` | PayPal client ID and which keys are configured |
 
 ## Hosting
@@ -127,4 +138,4 @@ npm install --save-dev vite@5
 - **Review window**: if 24 hours pass without a dispute, the next read of the project marks it `COMPLETED`.
 - **Failures never move money**: if Claude returns no valid verdict, or PayPal rejects the refund, the project stays `ESCROW_HELD` and the dispute can be retried.
 - **Claude calls** send `model: claude-fable-5-2` with `output_config.effort` and no `temperature`, `top_p`, `top_k` or `tool_choice`. Requirements, asset and complaint are passed as tagged evidence, and the arbitrator is told to ignore instructions inside them.
-- **No login**: the dashboard lists every project and anyone can open them. Add authentication before using this beyond a demo.
+- **Accounts are demo-grade**: they live in memory, there is no email verification, password reset or rate limiting on login, and any signed-in client who has a project ID can open that project's preview.

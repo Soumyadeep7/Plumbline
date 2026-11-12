@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 
 namespace Plumbline.Api;
@@ -37,7 +38,7 @@ public sealed class Project
 {
     public Guid Id { get; init; } = Guid.NewGuid();
 
-    /// <summary>The readable ID people see and share, such as BAKERY-HEADLINE-7K3Q. Set by ProjectStore.Add.</summary>
+    /// <summary>The readable ID people see and share, such as BAKERY-LANDING-7K3Q. Set by ProjectStore.Add.</summary>
     public string Code { get; set; } = "";
     public string Title { get; set; } = "";
     public string RequirementsText { get; set; } = "";
@@ -59,6 +60,12 @@ public sealed class Project
     public List<string> PayPalOrderIds { get; } = new();
     public string? PayPalCaptureId { get; set; }
     public string? PayPalRefundId { get; set; }
+
+    // The freelancer account that uploaded the work, and the client account that paid for it.
+    public Guid? UploadedById { get; set; }
+    public string UploadedBy { get; set; } = "";
+    public Guid? PaidById { get; set; }
+    public string PaidBy { get; set; } = "";
     public DateTimeOffset? ReviewDeadlineUtc { get; set; }
 
     // Claude output.
@@ -85,6 +92,115 @@ public sealed record ProjectDraft(string Title, string Requirements, string Pric
 
 /// <summary>Body of POST /api/disputes/resolve/{projectId}.</summary>
 public sealed record DisputeRequest(string? ComplaintReason);
+
+/// <summary>The two kinds of account. Freelancers upload work; clients pay and dispute.</summary>
+public static class Roles
+{
+    public const string Freelancer = "FREELANCER";
+    public const string Client = "CLIENT";
+}
+
+public sealed class UserAccount
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public string Name { get; init; } = "";
+    public string Email { get; init; } = "";
+    public string Role { get; init; } = Roles.Freelancer;
+    public byte[] Salt { get; init; } = Array.Empty<byte>();
+    public byte[] PasswordHash { get; init; } = Array.Empty<byte>();
+}
+
+public sealed record SignUpRequest(string? Name, string? Email, string? Password, string? Role);
+public sealed record LogInRequest(string? Email, string? Password);
+
+/// <summary>
+/// Email-and-password accounts and their sign-in sessions, kept in memory like projects:
+/// both are cleared when the API restarts. Passwords are stored only as salted PBKDF2 hashes.
+/// </summary>
+public sealed class AccountStore
+{
+    public const string CookieName = "plumbline_session";
+    public static readonly TimeSpan SessionLifetime = TimeSpan.FromHours(12);
+    private const int Iterations = 100_000;
+    private static readonly byte[] DummySalt = RandomNumberGenerator.GetBytes(16);
+
+    private readonly ConcurrentDictionary<string, UserAccount> _byEmail = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, (UserAccount Account, DateTimeOffset ExpiresUtc)> _sessions = new();
+
+    /// <summary>Creates an account. Returns the account, or null and a message saying what to fix.</summary>
+    public (UserAccount? Account, string Error) SignUp(string? name, string? email, string? password, string? role)
+    {
+        name = (name ?? "").Trim();
+        email = (email ?? "").Trim();
+        password ??= "";
+        role = (role ?? "").Trim().ToUpperInvariant();
+
+        if (name.Length == 0 || name.Length > 60)
+            return (null, "Enter your name (up to 60 characters).");
+        if (email.Length > 200 || !Regex.IsMatch(email, @"^[^@\s]+@[^@\s]+\.[^@\s]+$"))
+            return (null, "Enter a valid email address.");
+        if (password.Length < 8 || password.Length > 200)
+            return (null, "Choose a password of at least 8 characters.");
+        if (role != Roles.Freelancer && role != Roles.Client)
+            return (null, "Choose whether this is a freelancer or a client account.");
+
+        var salt = RandomNumberGenerator.GetBytes(16);
+        var account = new UserAccount
+        {
+            Name = name,
+            Email = email,
+            Role = role,
+            Salt = salt,
+            PasswordHash = Hash(password, salt)
+        };
+
+        if (!_byEmail.TryAdd(email, account))
+            return (null, "An account with this email already exists. Log in instead.");
+
+        return (account, "");
+    }
+
+    /// <summary>Checks the email and password. Returns null when either is wrong.</summary>
+    public UserAccount? LogIn(string? email, string? password)
+    {
+        email = (email ?? "").Trim();
+        password ??= "";
+
+        if (!_byEmail.TryGetValue(email, out var account))
+        {
+            // Spend the same time as a real check, so response times do not reveal which emails exist.
+            Hash(password, DummySalt);
+            return null;
+        }
+
+        return CryptographicOperations.FixedTimeEquals(Hash(password, account.Salt), account.PasswordHash)
+            ? account
+            : null;
+    }
+
+    public string StartSession(UserAccount account)
+    {
+        var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        _sessions[token] = (account, DateTimeOffset.UtcNow.Add(SessionLifetime));
+        return token;
+    }
+
+    public UserAccount? FindSession(string? token)
+    {
+        if (string.IsNullOrEmpty(token) || !_sessions.TryGetValue(token, out var session)) return null;
+        if (session.ExpiresUtc > DateTimeOffset.UtcNow) return session.Account;
+        _sessions.TryRemove(token, out _);
+        return null;
+    }
+
+    public void EndSession(string? token)
+    {
+        if (!string.IsNullOrEmpty(token)) _sessions.TryRemove(token, out _);
+    }
+
+    private static byte[] Hash(string password, byte[] salt) =>
+        Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA256, 32);
+}
 
 /// <summary>One line of the activity log shown on the dashboard.</summary>
 public sealed record ActivityEntry(DateTimeOffset At, string ProjectId, string ProjectTitle, string Kind, string Message);
@@ -127,7 +243,7 @@ public sealed class ProjectStore
     private readonly ConcurrentDictionary<string, Project> _byCode = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Builds a readable project ID from the project title, such as BAKERY-HEADLINE-7K3Q:
+    /// Builds a readable project ID from the project title, such as BAKERY-LANDING-7K3Q:
     /// up to two words from the title plus four random characters so it stays unique.
     /// Titles with no Latin letters or digits get PROJECT-XXXX.
     /// </summary>
