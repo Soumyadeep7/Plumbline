@@ -10,6 +10,12 @@ open Feliz
 // Data returned by the API (field names match the JSON)
 // ---------------------------------------------------------------------------------------------
 
+type ProjectDraftDto =
+    { draftTitle: string
+      draftRequirements: string
+      draftPrice: string
+      draftNotes: string }
+
 type TotalsDto =
     { awaitingCount: int
       awaitingAmount: float
@@ -177,6 +183,8 @@ type Model =
       Banner: Banner option
       Announcement: string
       // Freelancer upload form
+      DraftSource: string
+      DraftNotes: string
       Title: string
       Requirements: string
       Price: string
@@ -200,6 +208,9 @@ type Msg =
     | ToggleSpeech
     | ToggleTheme
     | ConfigLoaded of AppConfig
+    | SetDraftSource of string
+    | DraftProject
+    | ProjectDrafted of ProjectDraftDto
     | SetTitle of string
     | SetRequirements of string
     | SetPrice of string
@@ -284,6 +295,8 @@ let init () : Model * Cmd<Msg> =
           Busy = None
           Banner = None
           Announcement = ""
+          DraftSource = ""
+          DraftNotes = ""
           Title = ""
           Requirements = ""
           Price = "25.00"
@@ -389,6 +402,40 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
 
             notify Warning text next
 
+    | SetDraftSource value -> { model with DraftSource = value }, Cmd.none
+
+    | DraftProject ->
+        if model.DraftSource.Trim() = "" then
+            notify Danger "Paste the client's message or describe the job first." model
+        else
+            let body = createObj [ "text" ==> model.DraftSource ]
+
+            { model with
+                Busy = Some "Claude is filling in the form"
+                Banner = None },
+            Cmd.OfPromise.either
+                (fun () -> apiPostJson ("/api/projects/draft", body))
+                ()
+                (fun o -> ProjectDrafted(unbox<ProjectDraftDto> o))
+                (fun ex -> Failed(errorText ex))
+
+    | ProjectDrafted draft ->
+        let next =
+            { model with
+                Busy = None
+                Title = (if draft.draftTitle = "" then model.Title else draft.draftTitle)
+                Requirements = draft.draftRequirements
+                Price = (if draft.draftPrice = "" then model.Price else draft.draftPrice)
+                DraftNotes = draft.draftNotes }
+
+        let text =
+            if draft.draftPrice = "" then
+                "Claude filled in the title and the requirements. No price was stated, so enter it yourself. Check everything, add the asset, then upload."
+            else
+                "Claude filled in the title, the requirements and the price. Check everything, add the asset, then upload."
+
+        notify Success text next
+
     | SetTitle value -> { model with Title = value }, Cmd.none
     | SetRequirements value -> { model with Requirements = value }, Cmd.none
     | SetPrice value -> { model with Price = value }, Cmd.none
@@ -439,6 +486,8 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
                 Busy = None
                 Project = Some project
                 ProjectIdInput = project.id
+                DraftSource = ""
+                DraftNotes = ""
                 Title = ""
                 Requirements = ""
                 AssetText = ""
@@ -732,6 +781,29 @@ let private freelancerView (model: Model) (dispatch: Msg -> unit) =
                 Html.p
                     [ prop.text
                           "Upload your finished work. The client sees only a protected preview until they pay into escrow." ]
+                Html.div
+                    [ prop.className "panel"
+                      prop.children
+                          [ Html.h3 [ prop.text "Let Claude fill in the form" ]
+                            field
+                                "draft-source"
+                                "Paste the client's message, or describe the job"
+                                "Claude pulls out a title, the requirements in the client's own words, and the price if one is stated. You check everything before uploading."
+                                (Html.textarea
+                                    [ prop.id "draft-source"
+                                      prop.rows 5
+                                      aria "describedby" "draft-source-hint"
+                                      prop.value model.DraftSource
+                                      prop.onChange (fun (v: string) -> dispatch (SetDraftSource v)) ])
+                            Html.button
+                                [ prop.className "btn"
+                                  prop.disabled busy
+                                  prop.onClick (fun _ -> dispatch DraftProject)
+                                  prop.text "Fill in the form with Claude" ]
+                            (if model.DraftNotes = "" then
+                                 Html.none
+                             else
+                                 Html.p [ prop.className "hint"; prop.text ("Claude's note: " + model.DraftNotes) ]) ] ]
                 field
                     "title"
                     "Project title"
@@ -1173,6 +1245,25 @@ let private activityView (model: Model) =
         Html.p [ prop.text "Nothing has happened yet. Uploads, payments, releases and refunds are listed here." ]
     | Some d -> Html.div [ prop.className "panel"; prop.children [ activityList d.activity ] ]
 
+/// The theme switch: the knob sits on the left with a sun for the light theme and slides to the
+/// right with a moon for the night theme. Screen readers hear a switch named "Night theme".
+let private themeToggle (model: Model) (dispatch: Msg -> unit) =
+    Html.button
+        [ prop.className "theme-switch"
+          prop.custom ("role", "switch")
+          aria "checked" (if model.Light then "false" else "true")
+          aria "label" "Night theme"
+          prop.custom ("title", "Left is the light theme, right is the night theme")
+          prop.onClick (fun _ -> dispatch ToggleTheme)
+          prop.children
+              [ Html.span [ prop.className "icon icon-sun"; aria "hidden" "true" ]
+                Html.span [ prop.className "icon icon-moon"; aria "hidden" "true" ]
+                Html.span
+                    [ prop.className "switch-knob"
+                      aria "hidden" "true"
+                      prop.children
+                          [ Html.span [ prop.className (if model.Light then "icon icon-sun" else "icon icon-moon") ] ] ] ] ]
+
 let private integrationRow (name: string) (detail: string) (ready: bool) =
     Html.div
         [ prop.className "integration"
@@ -1220,11 +1311,7 @@ let private settingsView (model: Model) (dispatch: Msg -> unit) =
                                   aria "pressed" (if model.SpeechOn then "true" else "false")
                                   prop.onClick (fun _ -> dispatch ToggleSpeech)
                                   prop.text (if model.SpeechOn then "Voice on" else "Voice off") ]
-                            Html.button
-                                [ prop.className "btn"
-                                  aria "pressed" (if model.Light then "true" else "false")
-                                  prop.onClick (fun _ -> dispatch ToggleTheme)
-                                  prop.text (if model.Light then "Light theme on" else "Light theme off") ] ] ]
+                            themeToggle model dispatch ] ]
                 Html.section
                     [ prop.className "panel"
                       aria "labelledby" "data-heading"
@@ -1329,19 +1416,14 @@ let private appView (model: Model) (dispatch: Msg -> unit) =
                                         Html.div
                                             [ prop.className "toggles"
                                               prop.children
-                                                  [ Html.span [ prop.className "pill pill-info"; prop.text "PayPal Sandbox" ]
-                                                    (if showsRefresh then
+                                                  [ (if showsRefresh then
                                                          Html.button
                                                              [ prop.className "btn btn-small"
                                                                prop.onClick (fun _ -> dispatch RefreshDashboard)
                                                                prop.text "Refresh" ]
                                                      else
                                                          Html.none)
-                                                    Html.button
-                                                        [ prop.className "btn btn-small"
-                                                          aria "pressed" (if model.Light then "true" else "false")
-                                                          prop.onClick (fun _ -> dispatch ToggleTheme)
-                                                          prop.text (if model.Light then "Light theme on" else "Light theme off") ] ] ] ] ]
+                                                    themeToggle model dispatch ] ] ] ]
                             Html.main
                                 [ prop.id "workspace"
                                   prop.className "workspace"
@@ -1396,11 +1478,7 @@ let private siteView (model: Model) (dispatch: Msg -> unit) =
                             Html.div
                                 [ prop.className "toggles"
                                   prop.children
-                                      [ Html.button
-                                            [ prop.className "btn btn-small"
-                                              aria "pressed" (if model.Light then "true" else "false")
-                                              prop.onClick (fun _ -> dispatch ToggleTheme)
-                                              prop.text (if model.Light then "Light theme on" else "Light theme off") ]
+                                      [ themeToggle model dispatch
                                         Html.button
                                             [ prop.className "btn btn-small btn-primary"
                                               prop.onClick (fun _ -> dispatch (EnterApp Overview))

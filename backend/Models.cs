@@ -73,6 +73,12 @@ public sealed record DisputeVerdict(int MatchScore, string Verdict, string Reaso
     public const string Refund = "REFUND";
 }
 
+/// <summary>Body of POST /api/projects/draft.</summary>
+public sealed record ProjectDraftRequest(string? Text);
+
+/// <summary>What Claude pulled out of a client's message. Unknown fields are empty strings.</summary>
+public sealed record ProjectDraft(string Title, string Requirements, string Price, string Notes);
+
 /// <summary>Body of POST /api/disputes/resolve/{projectId}.</summary>
 public sealed record DisputeRequest(string? ComplaintReason);
 

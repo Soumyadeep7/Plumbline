@@ -211,6 +211,33 @@ app.MapPost("/api/projects/upload", async (HttpRequest request, ProjectStore sto
     return Results.Ok(ToDto(project));
 });
 
+// Form autofill: Claude (effort low) reads the client's message and returns a title, the
+// requirements in the client's own words and the price if one is stated. Nothing is stored.
+app.MapPost("/api/projects/draft", async (ProjectDraftRequest body, ClaudeClient claude, CancellationToken ct) =>
+{
+    var text = (body.Text ?? "").Trim();
+    if (text.Length == 0)
+        return Fail(400, "text is required.");
+    if (text.Length > Limits.MaxRequirementsChars)
+        return Fail(413, $"text is longer than {Limits.MaxRequirementsChars} characters.");
+
+    try
+    {
+        var draft = await claude.DraftProjectAsync(text, ct);
+        return Results.Ok(new
+        {
+            draftTitle = draft.Title,
+            draftRequirements = draft.Requirements,
+            draftPrice = draft.Price,
+            draftNotes = draft.Notes
+        });
+    }
+    catch (ClaudeException ex)
+    {
+        return Fail(502, ex.Message);
+    }
+});
+
 // 2. Protected preview while unpaid; full asset once paid. Includes Claude's accessible summary.
 app.MapGet("/api/projects/{id:guid}", async (Guid id, ProjectStore store, ClaudeClient claude, ILogger<Program> log, CancellationToken ct) =>
 {

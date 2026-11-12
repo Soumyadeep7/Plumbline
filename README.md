@@ -71,7 +71,7 @@ PowerShell `$env:DOTNET_ROLL_FORWARD = "Major"`, cmd `set DOTNET_ROLL_FORWARD=Ma
 
 All three steps are in the dashboard app's sidebar.
 
-1. **New project**: enter the client's requirements, a price, and the asset (pasted text/code or a file). Copy the project ID.
+1. **New project**: paste the client's message and press *Fill in the form with Claude* to get the title, requirements and price filled in for you to check. Or enter the client's requirements, a price, and the asset (pasted text/code or a file). Copy the project ID.
 2. **Review and pay**: load the project. You see Claude's bulleted summary and a masked or blurred preview. Pay with a sandbox personal account. The status turns to `ESCROW_HELD` and the full asset appears.
 3. **Disputes**: enter a complaint. Claude returns `{ match_score, verdict, reason }`. `RELEASE` sets the project to `COMPLETED`; `REFUND` calls PayPal's refund API and sets it to `REFUNDED`.
 
@@ -90,6 +90,7 @@ Payment confirmations and verdicts are spoken aloud (toggle in the header), anno
 | POST | `/api/payments/create-order/{projectId}` | creates a PayPal `CAPTURE` order |
 | POST | `/api/payments/capture-order/{projectId}/{orderId}` | captures payment, sets `ESCROW_HELD`, starts the 24-hour window |
 | POST | `/api/disputes/resolve/{projectId}` | JSON `{ "complaintReason": "..." }`; runs the arbitrator (`effort: high`) |
+| POST | `/api/projects/draft` | JSON `{ "text": "..." }`; Claude (`effort: low`) reads a client's message and returns a title, the requirements and the price if stated |
 | GET | `/api/dashboard` | totals by escrow state, all projects, the activity log and integration status (no asset content) |
 | GET | `/api/config` | PayPal client ID and which keys are configured |
 

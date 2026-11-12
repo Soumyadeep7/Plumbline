@@ -486,6 +486,72 @@ a {
   color: var(--disabled-text);
 }
 
+/* Theme switch: the knob rests on the left (sun, light theme) and slides right (moon, night). */
+.theme-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 5rem;
+  height: 2.75rem;
+  padding: 0 0.6rem;
+  background: var(--field);
+  color: var(--muted);
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.theme-switch:hover {
+  border-color: var(--text);
+}
+
+.theme-switch > .icon {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.switch-knob {
+  position: absolute;
+  top: 50%;
+  left: 0.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  background: var(--brand);
+  color: var(--on-brand);
+  border-radius: 50%;
+  transform: translateY(-50%);
+  transition: left 0.2s ease;
+}
+
+.theme-switch[aria-checked="true"] .switch-knob {
+  left: calc(100% - 2.3rem);
+}
+
+.switch-knob .icon {
+  width: 1.3rem;
+  height: 1.3rem;
+}
+
+.icon {
+  width: 1.5rem;
+  height: 1.5rem;
+  background-color: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+
+.icon-sun {
+  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='5'/%3E%3Cpath d='M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+.icon-moon {
+  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7z'/%3E%3C/svg%3E");
+}
+
 /* Status banners start with a word (Done, Problem, Working, Note), so meaning never depends
    on colour or on sound. */
 .banner {
