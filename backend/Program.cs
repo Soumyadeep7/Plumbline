@@ -14,6 +14,7 @@ builder.Services.AddSingleton<ClaudeClient>();
 
 var app = builder.Build();
 app.UseCors();
+app.UseStaticFiles();
 
 var activityLog = app.Services.GetRequiredService<ProjectStore>();
 
@@ -95,7 +96,9 @@ object ToDto(Project p)
 // Endpoints
 // ---------------------------------------------------------------------------------------------
 
-app.MapGet("/", () => Results.Text("Plumbline API is running. The UI is served by the frontend dev server."));
+// When hosted, the built frontend sits in wwwroot and is served by this same app. In local
+// development wwwroot does not exist and the Vite dev server serves the UI instead.
+app.MapFallbackToFile("index.html");
 
 // Public settings the browser needs. Secrets never leave the server.
 app.MapGet("/api/config", (PayPalClient paypal, ClaudeClient claude) => Results.Ok(new
@@ -419,4 +422,6 @@ app.MapPost("/api/disputes/resolve/{projectId:guid}", async (Guid projectId, Dis
     }
 });
 
-app.Run("http://localhost:5080");
+// Hosts such as Render provide the port in PORT. Locally the API stays on http://localhost:5080.
+var hostPort = Environment.GetEnvironmentVariable("PORT");
+app.Run(string.IsNullOrEmpty(hostPort) ? "http://localhost:5080" : $"http://0.0.0.0:{hostPort}");

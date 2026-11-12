@@ -93,6 +93,10 @@ Payment confirmations and verdicts are spoken aloud (toggle in the header), anno
 | GET | `/api/dashboard` | totals by escrow state, all projects, the activity log and integration status (no asset content) |
 | GET | `/api/config` | PayPal client ID and which keys are configured |
 
+## Hosting
+
+The `Dockerfile` builds one container in which the API also serves the built frontend, so a single web service is enough. On a host such as Render: create a Web Service from the GitHub repository, choose the Docker runtime, and add `PAYPAL_CLIENT_ID`, `PAYPAL_SECRET` and `ANTHROPIC_API_KEY` as environment variables in the host's dashboard. Never commit them; `.env` files are ignored by git here. Projects live in memory, so they are lost whenever the service restarts or goes to sleep.
+
 ## Recreating the projects from scratch
 
 These are the commands that produce the same skeleton; the repository already contains the result.

@@ -5,3 +5,6 @@ dist/
 fable_modules/
 *.fs.js
 *.fs.js.map
+.env
+.env.*
+wwwroot/
