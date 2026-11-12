@@ -154,6 +154,9 @@ let private savedLightTheme () : bool = jsNative
 [<Emit("new Date($0).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })")>]
 let private localDate (isoDate: string) : string = jsNative
 
+[<Emit("window.scrollTo(0, 0)")>]
+let private scrollToTop () : unit = jsNative
+
 [<Emit("window.location.assign($0)")>]
 let private goTo (url: string) : unit = jsNative
 
@@ -219,6 +222,7 @@ type Msg =
     | SetScreen of Screen
     | EnterApp of Screen
     | MeLoaded of MeDto
+    | LogIn
     | LogOut
     | LoggedOut
     | LeaveApp
@@ -372,8 +376,21 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
                 "PayPal login is not set up on the API. Add PAYPAL_CLIENT_ID and PAYPAL_SECRET, then restart it."
                 model
         | _ ->
-            // Not signed in yet: PayPal's login page, then back to the dashboard.
-            model, Cmd.ofEffect (fun _ -> goTo "/api/auth/login")
+            // Not signed in: stay on the website and point to the login button. Only that
+            // button leaves for PayPal.
+            let notified, speakCmd =
+                notify Warning "Log in with PayPal first. The button is at the top right of this page." model
+
+            notified, Cmd.batch [ speakCmd; Cmd.ofEffect (fun _ -> scrollToTop ()) ]
+
+    | LogIn ->
+        match model.Me with
+        | Some me when not me.loginAvailable ->
+            notify
+                Danger
+                "PayPal login is not set up on the API. Add PAYPAL_CLIENT_ID and PAYPAL_SECRET, then restart it."
+                model
+        | _ -> model, Cmd.ofEffect (fun _ -> goTo "/api/auth/login")
 
     | MeLoaded me ->
         let next = { model with Me = Some me }
@@ -1586,7 +1603,10 @@ let private siteView (model: Model) (dispatch: Msg -> unit) =
                                       [ themeToggle model dispatch
                                         Html.button
                                             [ prop.className "btn btn-small btn-primary"
-                                              prop.onClick (fun _ -> dispatch (EnterApp Overview))
+                                              prop.onClick (fun _ ->
+                                                  match model.Me with
+                                                  | Some me when me.loggedIn -> dispatch (EnterApp Overview)
+                                                  | _ -> dispatch LogIn)
                                               prop.text (
                                                   match model.Me with
                                                   | Some me when me.loggedIn -> "Open the dashboard"
